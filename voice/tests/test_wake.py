@@ -22,6 +22,25 @@ def test_normal_wake_phrase_avoids_prefix_false_positives() -> None:
     assert not matches_wake_phrase("este tipo", words)
 
 
+def test_detector_uses_open_vocabulary_instead_of_forcing_wake_grammar(
+    monkeypatch, tmp_path
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(wake, "SetLogLevel", lambda _level: None)
+    monkeypatch.setattr(wake, "Model", lambda _path: object())
+    monkeypatch.setattr(
+        wake,
+        "KaldiRecognizer",
+        lambda *args: calls.append(args) or object(),
+    )
+
+    WakeWordDetector(tmp_path, ("tipi",))
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+
+
 def test_detector_ignores_partial_wake_hypothesis(monkeypatch) -> None:
     class Recognizer:
         def AcceptWaveform(self, _pcm: bytes) -> bool:

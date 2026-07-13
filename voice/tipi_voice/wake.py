@@ -30,8 +30,10 @@ class WakeWordDetector:
         SetLogLevel(-1)
         self.words = {normalize_phrase(word) for word in wake_words}
         self.model = Model(str(model_path))
-        grammar = json.dumps([*sorted(self.words), "[unk]"], ensure_ascii=False)
-        self.recognizer = KaldiRecognizer(self.model, 16_000, grammar)
+        # Use the model's full vocabulary. A grammar containing only the wake
+        # word and ``[unk]`` forces acoustically similar ordinary words (for
+        # example "tipo" or "típico") toward "tipi" and creates false wakes.
+        self.recognizer = KaldiRecognizer(self.model, 16_000)
         self._rate_state: Any = None
         self._last_trigger = 0.0
 

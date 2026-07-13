@@ -1,0 +1,119 @@
+name: tipi
+
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    build:
+      context: ./gateway
+    user: root
+    privileged: true
+    pid: host
+    env_file:
+      - .env
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_DISABLE_BONJOUR: "1"
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - ./data/openclaw:/home/node/.openclaw
+      - ./:/tipi-project
+      - ${TIPI_HOST_ROOT:-/}:/host
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/openclaw.json:/tipi-config/openclaw.json:ro
+      - ./scripts/sync-openclaw-config.mjs:/tipi-config/sync-openclaw-config.mjs:ro
+    ports:
+      - "127.0.0.1:18789:18789"
+    init: true
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - node /tipi-config/sync-openclaw-config.mjs && exec node dist/index.js gateway --bind lan --port 18789
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:18789/readyz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    profiles: ["tools"]
+    user: root
+    privileged: true
+    pid: host
+    network_mode: service:openclaw-gateway
+    env_file:
+      - .env
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      BROWSER: echo
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - ./data/openclaw:/home/node/.openclaw
+      - ./:/tipi-project
+      - ${TIPI_HOST_ROOT:-/}:/host
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: ["node", "dist/index.js"]
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+
+  tipi-voice:
+    profiles: ["linux-audio"]
+    image: ${TIPI_VOICE_IMAGE:-tipi-voice:local}
+    build:
+      context: ./voice
+    pull_policy: build
+    network_mode: service:openclaw-gateway
+    env_file:
+      - .env
+    environment:
+      TIPI_GATEWAY_URL: ws://127.0.0.1:18789
+      TIPI_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      TIPI_VOSK_MODEL: /models/vosk-model-small-es-0.42
+      TIPI_STATE_DIR: /state
+      TIPI_LOG_DIR: /state/logs
+      TIPI_HEALTH_FILE: /state/tipi-voice.health
+    volumes:
+      - ./data/models:/models:ro
+      - ./data/voice:/state
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,time,sys; p='/state/tipi-voice.health'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p)<35 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 45s

@@ -1,0 +1,17 @@
+[Unit]
+Description=Tipi - OpenClaw y voz local
+Wants=network-online.target
+After=network-online.target docker.service sound.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=__TIPI_DIR__
+ExecStart=__TIPI_DIR__/scripts/update-and-start.sh
+ExecStop=__TIPI_DIR__/scripts/stop.sh
+RemainAfterExit=yes
+TimeoutStartSec=600
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

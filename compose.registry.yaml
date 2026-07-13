@@ -1,0 +1,12 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/andreuserrasastre/tipi-openclaw:latest}
+    pull_policy: always
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/andreuserrasastre/tipi-openclaw:latest}
+    pull_policy: always
+
+  tipi-voice:
+    image: ${TIPI_VOICE_IMAGE:-ghcr.io/andreuserrasastre/tipi-voice:latest}
+    pull_policy: always

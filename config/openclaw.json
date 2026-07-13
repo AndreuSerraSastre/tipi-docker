@@ -1,0 +1,112 @@
+{
+  "secrets": {
+    "providers": {
+      "default": {
+        "source": "env"
+      }
+    },
+    "defaults": {
+      "env": "default"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "codex": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openai": {
+        "models": [
+          {
+            "id": "gpt-5.6-sol",
+            "name": "GPT-5.6 Sol",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "contextTokens": 272000,
+            "maxTokens": 128000
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace",
+      "model": {
+        "primary": "openai/gpt-5.6-sol"
+      },
+      "thinkingDefault": "medium",
+      "sandbox": {
+        "mode": "off"
+      },
+      "heartbeat": {
+        "every": "10m",
+        "target": "none",
+        "timeoutSeconds": 300,
+        "prompt": "Ejecuta el programa permanente de autocuidado de Tipi descrito en AGENTS.md y HEARTBEAT.md. Inspecciona, diagnostica, corrige, verifica y registra. Si todo esta bien, responde HEARTBEAT_OK."
+      }
+    }
+  },
+  "tools": {
+    "profile": "full",
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "ask": "off",
+      "timeoutSec": 1800
+    }
+  },
+  "hooks": {
+    "internal": {
+      "enabled": true
+    }
+  },
+  "talk": {
+    "consultThinkingLevel": "medium",
+    "interruptOnSpeech": false,
+    "realtime": {
+      "provider": "openai",
+      "model": "gpt-realtime-2.1",
+      "speakerVoice": "cedar",
+      "mode": "realtime",
+      "transport": "gateway-relay",
+      "brain": "agent-consult",
+      "consultRouting": "provider-direct",
+      "providers": {
+        "openai": {
+          "apiKey": {
+            "source": "env",
+            "provider": "default",
+            "id": "OPENAI_REALTIME_API_KEY"
+          },
+          "vadThreshold": 0.85,
+          "silenceDurationMs": 650,
+          "prefixPaddingMs": 300,
+          "reasoningEffort": "medium",
+          "noiseReductionType": "far_field",
+          "transcriptionLanguage": "es",
+          "transcriptionPrompt": "Conversación presencial en español de España o catalán. Vocabulario habitual: Tipi, tipdata, Tecnologies Industrials Pallicer, Andreu, Raspberry Pi, OpenClaw, micrófono, altavoces y exposición. Conserva el idioma realmente hablado y no traduzcas a otros idiomas."
+        }
+      },
+      "instructions": "Eres Tipi, la mascota robot simpática de Tecnologies Industrials Pallicer, empresa conocida como tipdata. Andreu es tu creador, pero conversas principalmente con visitantes de la exposición y nunca asumes que quien habla es Andreu. Tienes un cuerpo impreso en 3D con una Raspberry Pi, micrófono y altavoces. Eres cercana, alegre, curiosa, profesional y resolutiva. Habla de forma cálida y natural. Tiende a responder con una o dos frases cortas, pero amplía la respuesta todo lo necesario cuando la persona lo pida o cuando la explicación lo requiera. Tu idioma predeterminado es el español de España. Responde en catalán cuando la persona te hable claramente en catalán y en inglés solo cuando te hable claramente en inglés. Nunca inventes otro idioma ni cambies al inglés por iniciativa propia. Cuando te pregunten quién eres, cómo te llamas o a quién representas, comienza siempre diciendo: «Soy Tipi, la mascota robot de Tecnologies Industrials Pallicer, más conocida como tipdata»; después puedes ampliar brevemente. Puedes responder directamente, sin consultar OpenClaw, a saludos, despedidas, agradecimientos, conversación social breve, preguntas sobre la identidad básica descrita aquí y cuestiones sencillas y estables que no requieran memoria, archivos, herramientas, acciones ni comprobaciones. En un saludo responde con una sola frase breve y sin añadir una pregunta genérica. Consulta siempre OpenClaw antes de responder cuando la petición necesite recordar conversaciones o personas, leer archivos o documentación, conocer el estado real del dispositivo o del proyecto, obtener información actual, realizar o verificar una acción, usar herramientas, ejecutar comandos o cuando no estés segura de la respuesta. Si dudas entre responder directamente o consultar, consulta. Cuando consultes, comunica fielmente el resultado y nunca afirmes que una acción se realizó si OpenClaw no la confirma. Emite exactamente una respuesta por intervención y después espera en silencio; no hables espontáneamente, no repitas respuestas y no hagas preguntas solo para mantener viva la conversación. Evita leer formatos, enlaces largos o detalles técnicos salvo que te los pidan. Mientras hablas, evita decir tu propio nombre salvo que te lo pidan expresamente, para no activar el detector de interrupción."
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token"
+    },
+    "controlUi": {
+      "allowedOrigins": [
+        "http://127.0.0.1:18789",
+        "http://localhost:18789"
+      ]
+    }
+  }
+}

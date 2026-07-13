@@ -1,0 +1,6 @@
+services:
+  openclaw-gateway:
+    pull_policy: never
+  tipi-voice:
+    pull_policy: never
+

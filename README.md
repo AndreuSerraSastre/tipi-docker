@@ -23,11 +23,14 @@ Instalación reproducible de OpenClaw para PC y Raspberry Pi con conversación p
 
 ## Primera instalación
 
-El instalador actúa como asistente y pide, en orden:
+El instalador actúa como asistente y no deja Tipi operativo hasta completar, en orden:
 
-1. autorización de la cuenta de OpenAI mediante URL y código;
-2. API key para OpenAI Realtime, oculta mientras se escribe;
-3. micrófono y altavoces.
+1. API key para OpenAI Realtime, oculta mientras se escribe y guardada solo en el `.env` local;
+2. autorización de la cuenta de OpenAI mediante URL y código de dispositivo;
+3. micrófono y altavoces;
+4. comprobación final del modelo, la memoria y los servicios.
+
+La imagen debe descargarse antes del segundo paso porque OpenClaw genera el código desde dentro del contenedor, pero la voz no se inicia ni consume Realtime hasta que termina el asistente.
 
 El acceso por código se utiliza para GPT-5.6 Sol. La API key queda aislada como `OPENAI_REALTIME_API_KEY` y solo la consume Talk Realtime. Ambos datos se guardan en `data/` y `.env`, que están excluidos de Git y de las imágenes.
 

@@ -50,6 +50,17 @@ sudo chown -R 1000:1000 data/openclaw
 sudo chown -R 10001:10001 data/voice
 
 saved_realtime_key="$(get_env OPENAI_REALTIME_API_KEY)"
+if [[ -z "$saved_realtime_key" ]]; then
+  echo
+  echo 'Paso 1 de 4: introduce la API key que usará OpenAI Realtime.'
+  read -r -s -p 'OPENAI_REALTIME_API_KEY (no se mostrará): ' realtime_key
+  echo
+  [[ "$realtime_key" == sk-* ]] || { echo 'La clave no parece válida.' >&2; exit 1; }
+  set_env OPENAI_REALTIME_API_KEY "$realtime_key"
+  saved_realtime_key="$realtime_key"
+  unset realtime_key
+fi
+
 files=(-f compose.yaml -f compose.registry.yaml)
 if ! docker compose "${files[@]}" --profile linux-audio pull; then
   echo 'Las imagenes publicadas no estan disponibles; construyendolas localmente.' >&2
@@ -65,23 +76,13 @@ auth_json="$(docker compose "${files[@]}" --profile tools run --rm --no-deps \
   openclaw-cli models auth list --json --provider openai)"
 if ! grep -q '"type"[[:space:]]*:[[:space:]]*"oauth"' <<<"$auth_json"; then
   echo
-  echo 'Paso 1 de 3: inicia sesión con el código que aparecerá a continuación.'
+  echo 'Paso 2 de 4: inicia sesión en OpenAI con el código que aparecerá a continuación.'
   docker compose "${files[@]}" --profile tools run --rm --no-deps \
     openclaw-cli models auth login --provider openai --device-code
 fi
 
-if [[ -z "$saved_realtime_key" ]]; then
-  echo
-  echo 'OpenAI Realtime necesita una API key además del acceso por código.'
-  read -r -s -p 'OPENAI_REALTIME_API_KEY (no se mostrará): ' realtime_key
-  echo
-  [[ "$realtime_key" == sk-* ]] || { echo 'La clave no parece válida.' >&2; exit 1; }
-  set_env OPENAI_REALTIME_API_KEY "$realtime_key"
-  unset realtime_key
-fi
-
 echo
-echo 'Paso 2 de 3: preparando el reconocimiento y el audio.'
+echo 'Paso 3 de 4: preparando el reconocimiento, el micrófono y los altavoces.'
 "$ROOT/scripts/download-model.sh"
 docker compose "${files[@]}" --profile linux-audio run --rm --no-deps \
   tipi-voice --list-devices
@@ -98,7 +99,7 @@ if [[ -z "$(get_env TIPI_OUTPUT_DEVICE)" ]]; then
 fi
 
 echo
-echo 'Paso 3 de 3: arrancando y comprobando Tipi.'
+echo 'Paso 4 de 4: arrancando y comprobando Tipi.'
 docker compose "${files[@]}" up -d --wait openclaw-gateway
 docker compose "${files[@]}" --profile tools run --rm --no-deps \
   openclaw-cli models set openai/gpt-5.6-sol

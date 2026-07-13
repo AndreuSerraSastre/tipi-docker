@@ -27,6 +27,8 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: voice/requirements-dev.txt
+      - name: Instalar PortAudio para las pruebas de voz
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
       - run: pip install -r voice/requirements-dev.txt -e voice
       - run: pytest -q voice/tests
 

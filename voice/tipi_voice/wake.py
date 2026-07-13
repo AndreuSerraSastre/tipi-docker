@@ -40,7 +40,12 @@ class WakeWordDetector:
             pcm_48khz, 2, 1, 48_000, 16_000, self._rate_state
         )
         complete = self.recognizer.AcceptWaveform(pcm_16khz)
-        raw = self.recognizer.Result() if complete else self.recognizer.PartialResult()
+        # Partial Vosk hypotheses repeatedly classified ambient speech and
+        # noise as the tiny wake-word grammar. Wait for an utterance endpoint
+        # before waking so a short-lived partial guess cannot open a session.
+        if not complete:
+            return False
+        raw = self.recognizer.Result()
         data = json.loads(raw)
         phrase = normalize_phrase(data.get("text") or data.get("partial") or "")
         if not phrase or time.monotonic() - self._last_trigger < 2:

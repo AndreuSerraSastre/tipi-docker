@@ -52,7 +52,7 @@ function Get-EnvValueFromFile([string]$Path, [string]$Name) {
 
 function Read-RealtimeKey {
     Write-Host ''
-    Write-Host 'OpenAI Realtime necesita una API key además del acceso por código.'
+    Write-Host 'Paso 1 de 4: introduce la API key que usará OpenAI Realtime.'
     $secureKey = Read-Host 'OPENAI_REALTIME_API_KEY (no se mostrará)' -AsSecureString
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureKey)
     try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
@@ -122,7 +122,7 @@ if ($jsonStart -ge 0) {
 }
 if (-not $hasOAuth) {
     Write-Host ''
-    Write-Host 'Paso 1 de 3: inicia sesión con el código que aparecerá a continuación.'
+    Write-Host 'Paso 2 de 4: inicia sesión en OpenAI con el código que aparecerá a continuación.'
     docker compose --profile tools run --rm --no-deps openclaw-cli `
         models auth login --provider openai --device-code
     if ($LASTEXITCODE -ne 0) { throw 'No se completó el acceso por código.' }
@@ -135,7 +135,7 @@ if (-not $savedRealtimeKey) {
 }
 
 Write-Host ''
-Write-Host 'Paso 2 de 3: preparando el reconocimiento y el audio.'
+Write-Host 'Paso 3 de 4: preparando el reconocimiento, el micrófono y los altavoces.'
 & (Join-Path $PSScriptRoot 'download-model.ps1')
 if (-not (Test-Path -LiteralPath '.venv\Scripts\python.exe')) { py -3.12 -m venv .venv }
 & '.venv\Scripts\python.exe' -m pip install --disable-pip-version-check -q -r 'voice\requirements.txt'
@@ -151,7 +151,7 @@ if (-not (Get-EnvValue 'TIPI_OUTPUT_DEVICE')) {
 }
 
 Write-Host ''
-Write-Host 'Paso 3 de 3: arrancando y comprobando Tipi.'
+Write-Host 'Paso 4 de 4: arrancando y comprobando Tipi.'
 docker compose up -d openclaw-gateway
 docker compose --profile tools run --rm --no-deps openclaw-cli models set openai/gpt-5.6-sol
 docker compose up -d --force-recreate --wait openclaw-gateway

@@ -15,7 +15,7 @@ if (( EUID != 0 )); then
 fi
 
 missing_commands=()
-for command_name in curl unzip openssl python3 timeout; do
+for command_name in aplay arecord curl espeak-ng unzip openssl python3 timeout; do
   command -v "$command_name" >/dev/null || missing_commands+=("$command_name")
 done
 if (( ${#missing_commands[@]} )); then
@@ -23,7 +23,7 @@ if (( ${#missing_commands[@]} )); then
     echo "Instalando dependencias de host: ${missing_commands[*]}"
     "${SUDO[@]}" apt-get update
     "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
-      ca-certificates coreutils curl openssl python3 unzip
+      alsa-utils ca-certificates coreutils curl espeak-ng openssl python3 unzip
   else
     echo "Faltan utilidades de host: ${missing_commands[*]}." >&2
     exit 1

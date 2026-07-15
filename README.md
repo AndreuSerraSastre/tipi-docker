@@ -7,7 +7,7 @@ Instalación reproducible de OpenClaw para PC y Raspberry Pi con conversación p
 - OpenClaw con `openai/gpt-5.6-luna`, razonamiento `low` y autenticación de OpenAI por código de dispositivo.
 - OpenClaw Talk con `gpt-realtime-2.1`, voz `cedar`, razonamiento `low`, reducción de ruido y transcripción guiada para español y catalán.
 - Puente de voz Python 3.12 para Linux/ARM64, Linux/AMD64 y Windows.
-- Activación offline mediante Vosk. Durante la reproducción combina una transcripción abierta con un segundo reconocedor sensible y exige consenso para recuperar la palabra bajo voz solapada sin confundir «tipo», «típico», «sí» o «para ti».
+- Activación offline mediante Vosk. Durante la reproducción correlaciona dos reconocedores en una ventana de audio y admite alias fonéticos terminales con contexto seguro, para recuperar «Tipi» bajo voz solapada sin confundir «tipo», «típico», «sí» o «para ti».
 - Consulta híbrida: Realtime resuelve conversación sencilla y delega en OpenClaw cuando necesita memoria, archivos, información actual, herramientas, acciones o verificación.
 - Interrupción local: decir «Tipi» durante una respuesta detiene inmediatamente el audio atrasado y abre un nuevo turno. La consulta activa se conserva para poder corregirla o ampliarla.
 - Cierre local con «cállate», «para», «silencio», «prou» y variantes inequívocas.
@@ -60,6 +60,14 @@ journalctl -u tipi.service -f
 ```
 
 `doctor.sh` es no destructivo: no recrea servicios ni ejecuta el asistente interno de OpenClaw. Comprueba salud, configuración efectiva, Luna autenticado, Talk, audio y autoinicio.
+
+Para validar la palabra de activación a través de los altavoces, la sala y el micrófono reales:
+
+```bash
+./scripts/test-wake-room.sh
+```
+
+La prueba reproduce tres «Tipi» solapados y seis frases conflictivas, detiene solo la voz durante la captura y siempre restaura su estado anterior. Si falla, conserva las grabaciones bajo `/tmp/tipi-wake-room-test`; también admite dispositivos explícitos, por ejemplo `./scripts/test-wake-room.sh hw:1,0 hw:1,0`.
 
 Desde otro PC:
 

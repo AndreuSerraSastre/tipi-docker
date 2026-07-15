@@ -13,7 +13,8 @@ from vosk import KaldiRecognizer, Model, SetLogLevel
 
 NORMAL_WAKE_COOLDOWN_SECONDS = 2.0
 PLAYBACK_WAKE_COOLDOWN_SECONDS = 0.45
-PLAYBACK_PARTIAL_HITS = 4
+PLAYBACK_EVIDENCE_WINDOW_SECONDS = 1.25
+PLAYBACK_EVIDENCE_WINDOW_SAMPLES = round(48_000 * PLAYBACK_EVIDENCE_WINDOW_SECONDS)
 _PLAYBACK_GRAMMAR_WORDS = {"tipi", "tip"}
 _PLAYBACK_ACOUSTIC_TOKENS = {"tv", "pipi", "tibi"}
 _PLAYBACK_COMMAND_TOKENS = {"calla", "callate", "escucha", "para", "silencio"}
@@ -54,6 +55,16 @@ def matches_playback_acoustic_cue(phrase: str) -> bool:
     )
 
 
+def matches_playback_terminal_alias(phrase: str) -> bool:
+    """Acepta un alias fonético inequívoco al final de la hipótesis abierta."""
+    tokens = normalize_phrase(phrase).split()
+    return bool(
+        tokens
+        and tokens[-1] in _PLAYBACK_ACOUSTIC_TOKENS
+        and (len(tokens) == 1 or tokens[-2] not in _PLAYBACK_FALSE_PREDECESSORS)
+    )
+
+
 class WakeWordDetector:
     def __init__(self, model_path: Path, wake_words: tuple[str, ...]):
         SetLogLevel(-1)
@@ -71,9 +82,19 @@ class WakeWordDetector:
         self.playback_recognizer = KaldiRecognizer(self.model, 16_000, playback_grammar)
         self._rate_state: Any = None
         self._last_trigger = 0.0
-        self._partial_wake_hits = 0
+        self._playback_sample_position = 0
+        self._last_acoustic_cue_sample: int | None = None
+        self._last_constrained_wake_sample: int | None = None
+
+    def _clear_playback_evidence(self) -> None:
+        self._last_acoustic_cue_sample = None
+        self._last_constrained_wake_sample = None
 
     def feed(self, pcm_48khz: bytes, *, strict: bool = False) -> bool:
+        self._playback_sample_position = (
+            getattr(self, "_playback_sample_position", 0) + len(pcm_48khz) // 2
+        )
+        position = self._playback_sample_position
         pcm_16khz, self._rate_state = audioop.ratecv(
             pcm_48khz, 2, 1, 48_000, 16_000, self._rate_state
         )
@@ -98,48 +119,61 @@ class WakeWordDetector:
             playback_phrase = normalize_phrase(
                 playback_data.get("text") or playback_data.get("partial") or ""
             )
+        else:
+            self._clear_playback_evidence()
         cooldown = (
             PLAYBACK_WAKE_COOLDOWN_SECONDS if strict else NORMAL_WAKE_COOLDOWN_SECONDS
         )
-        if not phrase:
-            if strict:
-                self._partial_wake_hits = 0
-            return False
-        if time.monotonic() - self._last_trigger < cooldown:
-            return False
-        direct_match = matches_wake_phrase(phrase, self.words, strict=strict)
-        fallback_match = bool(
+        direct_match = bool(
+            phrase and matches_wake_phrase(phrase, self.words, strict=strict)
+        )
+        terminal_alias = bool(strict and matches_playback_terminal_alias(phrase))
+        acoustic_cue = bool(strict and matches_playback_acoustic_cue(phrase))
+        constrained_wake = bool(
             strict
             and matches_wake_phrase(
                 playback_phrase, _PLAYBACK_GRAMMAR_WORDS, strict=True
             )
-            and matches_playback_acoustic_cue(phrase)
         )
-        match = direct_match or fallback_match
-        if not match:
-            self._partial_wake_hits = 0
+        if acoustic_cue:
+            self._last_acoustic_cue_sample = position
+        if constrained_wake:
+            self._last_constrained_wake_sample = position
+
+        cue_position = getattr(self, "_last_acoustic_cue_sample", None)
+        constrained_position = getattr(self, "_last_constrained_wake_sample", None)
+        for attribute, evidence_position in (
+            ("_last_acoustic_cue_sample", cue_position),
+            ("_last_constrained_wake_sample", constrained_position),
+        ):
+            if (
+                evidence_position is not None
+                and position - evidence_position > PLAYBACK_EVIDENCE_WINDOW_SAMPLES
+            ):
+                setattr(self, attribute, None)
+        cue_position = getattr(self, "_last_acoustic_cue_sample", None)
+        constrained_position = getattr(self, "_last_constrained_wake_sample", None)
+        fallback_match = bool(
+            strict
+            and (acoustic_cue or constrained_wake)
+            and cue_position is not None
+            and constrained_position is not None
+            and abs(cue_position - constrained_position)
+            <= PLAYBACK_EVIDENCE_WINDOW_SAMPLES
+        )
+        match = direct_match or terminal_alias or fallback_match
+        if not match or time.monotonic() - self._last_trigger < cooldown:
             return False
-        if fallback_match and not direct_match:
-            # The constrained recognizer can force an ordinary final word into
-            # "tipi". Require a stable run even when both recognizers just
-            # closed an utterance; a genuine short name remains stable across
-            # several 20 ms frames, while guesses such as "tipico" mutate.
-            self._partial_wake_hits += 1
-            if self._partial_wake_hits < PLAYBACK_PARTIAL_HITS:
-                return False
-        else:
-            # An exact match from the open recognizer is independent evidence
-            # and should stop playback on its first partial hypothesis.
-            self._partial_wake_hits = 0
-        if match:
-            self._last_trigger = time.monotonic()
-            self.recognizer.Reset()
-            self.playback_recognizer.Reset()
-            self._partial_wake_hits = 0
-        return match
+
+        self._last_trigger = time.monotonic()
+        self.recognizer.Reset()
+        self.playback_recognizer.Reset()
+        self._clear_playback_evidence()
+        return True
 
     def reset(self) -> None:
         self.recognizer.Reset()
         self.playback_recognizer.Reset()
         self._rate_state = None
-        self._partial_wake_hits = 0
+        self._playback_sample_position = 0
+        self._clear_playback_evidence()

@@ -2,11 +2,16 @@ import json
 
 from tipi_voice import wake
 from tipi_voice.wake import (
+    PLAYBACK_EVIDENCE_WINDOW_SAMPLES,
     WakeWordDetector,
     matches_playback_acoustic_cue,
+    matches_playback_terminal_alias,
     matches_wake_phrase,
     normalize_phrase,
 )
+
+
+PCM_FRAME = bytes(1_920)
 
 
 class SilentRecognizer:
@@ -73,7 +78,6 @@ def test_detector_ignores_partial_wake_hypothesis(monkeypatch) -> None:
     detector.playback_recognizer = SilentRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert not detector.feed(b"ambient speech")
@@ -96,7 +100,6 @@ def test_detector_accepts_completed_wake_phrase(monkeypatch) -> None:
     detector.playback_recognizer = SilentRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert detector.feed(b"tipi")
@@ -119,7 +122,6 @@ def test_detector_accepts_stable_partial_during_playback(monkeypatch) -> None:
     detector.playback_recognizer = SilentRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert detector.feed(b"tipi", strict=True)
@@ -145,7 +147,6 @@ def test_detector_accepts_growing_partial_during_playback(monkeypatch) -> None:
     detector.playback_recognizer = SilentRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert detector.feed(b"tipi", strict=True)
@@ -168,17 +169,16 @@ def test_playback_wake_uses_shorter_cooldown(monkeypatch) -> None:
     detector.playback_recognizer = SilentRecognizer()
     detector._rate_state = None
     detector._last_trigger = 100.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
     monkeypatch.setattr(wake.time, "monotonic", lambda: 100.5)
 
     assert detector.feed(b"tipi", strict=True)
 
 
-def test_blank_partial_breaks_playback_wake_sequence(monkeypatch) -> None:
+def test_playback_evidence_can_arrive_asynchronously(monkeypatch) -> None:
     class OpenRecognizer:
         def __init__(self) -> None:
-            self.partials = iter(("voy a explicar tv", "", "voy a explicar tv"))
+            self.partials = iter(("", "", "voy a explicar tv"))
 
         def AcceptWaveform(self, _pcm: bytes) -> bool:
             return False
@@ -186,26 +186,66 @@ def test_blank_partial_breaks_playback_wake_sequence(monkeypatch) -> None:
         def PartialResult(self) -> str:
             return json.dumps({"partial": next(self.partials)})
 
+        def Reset(self) -> None:
+            pass
+
     detector = WakeWordDetector.__new__(WakeWordDetector)
 
     class PlaybackRecognizer:
+        def __init__(self) -> None:
+            self.partials = iter(("tipi", "", ""))
+
         def AcceptWaveform(self, _pcm: bytes) -> bool:
             return False
 
         def PartialResult(self) -> str:
-            return json.dumps({"partial": "tipi"})
+            return json.dumps({"partial": next(self.partials)})
+
+        def Reset(self) -> None:
+            pass
 
     detector.words = {"otra"}
     detector.recognizer = OpenRecognizer()
     detector.playback_recognizer = PlaybackRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
-    assert not detector.feed(b"tipi", strict=True)
-    assert not detector.feed(b"silence", strict=True)
-    assert not detector.feed(b"tipi", strict=True)
+    assert not detector.feed(PCM_FRAME, strict=True)
+    assert not detector.feed(PCM_FRAME, strict=True)
+    assert detector.feed(PCM_FRAME, strict=True)
+
+
+def test_playback_evidence_expires(monkeypatch) -> None:
+    frame_count = PLAYBACK_EVIDENCE_WINDOW_SAMPLES // 960 + 2
+
+    class OpenRecognizer:
+        def __init__(self) -> None:
+            self.index = 0
+
+        def AcceptWaveform(self, _pcm: bytes) -> bool:
+            return False
+
+        def PartialResult(self) -> str:
+            self.index += 1
+            phrase = "tv callate" if self.index == frame_count else ""
+            return json.dumps({"partial": phrase})
+
+    class PlaybackRecognizer(OpenRecognizer):
+        def PartialResult(self) -> str:
+            self.index += 1
+            return json.dumps({"partial": "tipi" if self.index == 1 else ""})
+
+    detector = WakeWordDetector.__new__(WakeWordDetector)
+    detector.words = {"otra"}
+    detector.recognizer = OpenRecognizer()
+    detector.playback_recognizer = PlaybackRecognizer()
+    detector._rate_state = None
+    detector._last_trigger = 0.0
+    monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
+
+    for _ in range(frame_count):
+        assert not detector.feed(PCM_FRAME, strict=True)
 
 
 def test_playback_consensus_recovers_overlapped_wake_word(monkeypatch) -> None:
@@ -229,13 +269,33 @@ def test_playback_consensus_recovers_overlapped_wake_word(monkeypatch) -> None:
     detector.playback_recognizer = PlaybackRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
-    assert not detector.feed(b"mixed", strict=True)
-    assert not detector.feed(b"mixed", strict=True)
-    assert not detector.feed(b"mixed", strict=True)
-    assert detector.feed(b"mixed", strict=True)
+    assert detector.feed(PCM_FRAME, strict=True)
+
+
+def test_playback_terminal_alias_does_not_require_constrained_partial(
+    monkeypatch,
+) -> None:
+    class OpenRecognizer:
+        def AcceptWaveform(self, _pcm: bytes) -> bool:
+            return False
+
+        def PartialResult(self) -> str:
+            return json.dumps({"partial": "estamos voces tv"})
+
+        def Reset(self) -> None:
+            pass
+
+    detector = WakeWordDetector.__new__(WakeWordDetector)
+    detector.words = {"tipi"}
+    detector.recognizer = OpenRecognizer()
+    detector.playback_recognizer = SilentRecognizer()
+    detector._rate_state = None
+    detector._last_trigger = 0.0
+    monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
+
+    assert detector.feed(PCM_FRAME, strict=True)
 
 
 def test_playback_consensus_rejects_isolated_complete_guess(monkeypatch) -> None:
@@ -256,7 +316,6 @@ def test_playback_consensus_rejects_isolated_complete_guess(monkeypatch) -> None
     detector.playback_recognizer = PlaybackRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert not detector.feed(b"ordinary", strict=True)
@@ -280,7 +339,6 @@ def test_playback_consensus_rejects_similar_ordinary_word(monkeypatch) -> None:
     detector.playback_recognizer = PlaybackRecognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
-    detector._partial_wake_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert not detector.feed(b"ordinary", strict=True)
@@ -298,3 +356,10 @@ def test_playback_acoustic_cue_rejects_common_similar_words() -> None:
     assert not matches_playback_acoustic_cue("si ese tipo tv")
     assert not matches_playback_acoustic_cue("si ese tipo tv marti")
     assert not matches_playback_acoustic_cue("tv marti")
+
+
+def test_playback_terminal_alias_requires_safe_final_context() -> None:
+    assert matches_playback_terminal_alias("estamos voces tv")
+    assert matches_playback_terminal_alias("pipi")
+    assert not matches_playback_terminal_alias("si ese tipo tv")
+    assert not matches_playback_terminal_alias("tv marti")

@@ -4,7 +4,9 @@ from tipi_voice import wake
 from tipi_voice.wake import (
     PLAYBACK_EVIDENCE_WINDOW_SAMPLES,
     WakeWordDetector,
+    matches_completed_playback_alias,
     matches_playback_acoustic_cue,
+    matches_playback_contrastive_cue,
     matches_playback_terminal_alias,
     matches_wake_phrase,
     normalize_phrase,
@@ -48,20 +50,28 @@ def test_detector_keeps_open_vocabulary_as_the_primary_recognizer(
 ) -> None:
     calls: list[tuple[object, ...]] = []
 
+    class Recognizer:
+        def __init__(self, *args: object) -> None:
+            calls.append(args)
+            self.words_enabled = False
+
+        def SetWords(self, enabled: bool) -> None:
+            self.words_enabled = enabled
+
     monkeypatch.setattr(wake, "SetLogLevel", lambda _level: None)
     monkeypatch.setattr(wake, "Model", lambda _path: object())
-    monkeypatch.setattr(
-        wake,
-        "KaldiRecognizer",
-        lambda *args: calls.append(args) or object(),
-    )
+    monkeypatch.setattr(wake, "KaldiRecognizer", Recognizer)
 
-    WakeWordDetector(tmp_path, ("tipi",))
+    detector = WakeWordDetector(tmp_path, ("tipi",))
 
     assert len(calls) == 2
     assert len(calls[0]) == 2
     assert len(calls[1]) == 3
-    assert json.loads(calls[1][2]) == ["tipi", "tip", "[unk]"]
+    grammar = json.loads(calls[1][2])
+    assert grammar[:4] == ["tipi", "tip", "tipo", "tipos"]
+    assert {"t\u00edpico", "t\u00edpica", "si", "s\u00ed", "ti", "tv"} <= set(grammar)
+    assert grammar[-1] == "[unk]"
+    assert detector.playback_recognizer.words_enabled
 
 
 def test_detector_ignores_partial_wake_hypothesis(monkeypatch) -> None:
@@ -363,3 +373,89 @@ def test_playback_terminal_alias_requires_safe_final_context() -> None:
     assert matches_playback_terminal_alias("pipi")
     assert not matches_playback_terminal_alias("si ese tipo tv")
     assert not matches_playback_terminal_alias("tv marti")
+
+
+def test_contrastive_cue_rejects_alias_after_explicit_confuser() -> None:
+    assert matches_playback_contrastive_cue("tipi")
+    assert matches_playback_contrastive_cue("tv")
+    assert matches_playback_contrastive_cue("ti para")
+    assert not matches_playback_contrastive_cue("si tipo tipi")
+    assert not matches_playback_contrastive_cue("tipo tv")
+
+
+def test_completed_playback_alias_requires_one_long_word() -> None:
+    assert matches_completed_playback_alias(
+        {"result": [{"word": "tv", "start": 10.11, "end": 10.56}]}
+    )
+    assert not matches_completed_playback_alias(
+        {"result": [{"word": "pipi", "start": 10.11, "end": 10.44}]}
+    )
+    assert not matches_completed_playback_alias(
+        {
+            "result": [
+                {"word": "tipo", "start": 10.0, "end": 10.3},
+                {"word": "tipi", "start": 10.3, "end": 10.75},
+            ]
+        }
+    )
+
+
+def test_completed_contrastive_alias_recovers_recent_safe_endpoint(
+    monkeypatch,
+) -> None:
+    class OpenRecognizer:
+        def AcceptWaveform(self, _pcm: bytes) -> bool:
+            return True
+
+        def Result(self) -> str:
+            return json.dumps({"text": "esta voces"})
+
+        def Reset(self) -> None:
+            pass
+
+    class PlaybackRecognizer(OpenRecognizer):
+        def Result(self) -> str:
+            return json.dumps(
+                {
+                    "text": "tv",
+                    "result": [{"word": "tv", "start": 10.11, "end": 10.56}],
+                }
+            )
+
+    detector = WakeWordDetector.__new__(WakeWordDetector)
+    detector.words = {"otra"}
+    detector.recognizer = OpenRecognizer()
+    detector.playback_recognizer = PlaybackRecognizer()
+    detector._rate_state = None
+    detector._last_trigger = 0.0
+    monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
+
+    assert detector.feed(PCM_FRAME, strict=True)
+
+
+def test_completed_contrastive_alias_rejects_unsafe_endpoint(monkeypatch) -> None:
+    class OpenRecognizer:
+        def AcceptWaveform(self, _pcm: bytes) -> bool:
+            return True
+
+        def Result(self) -> str:
+            return json.dumps({"text": "si ese tipo"})
+
+    class PlaybackRecognizer(OpenRecognizer):
+        def Result(self) -> str:
+            return json.dumps(
+                {
+                    "text": "tv",
+                    "result": [{"word": "tv", "start": 10.11, "end": 10.56}],
+                }
+            )
+
+    detector = WakeWordDetector.__new__(WakeWordDetector)
+    detector.words = {"otra"}
+    detector.recognizer = OpenRecognizer()
+    detector.playback_recognizer = PlaybackRecognizer()
+    detector._rate_state = None
+    detector._last_trigger = 0.0
+    monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
+
+    assert not detector.feed(PCM_FRAME, strict=True)

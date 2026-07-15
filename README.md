@@ -7,7 +7,7 @@ Instalación reproducible de OpenClaw para PC y Raspberry Pi con conversación p
 - OpenClaw con `openai/gpt-5.6-luna`, razonamiento `low` y autenticación de OpenAI por código de dispositivo.
 - OpenClaw Talk con `gpt-realtime-2.1`, voz `cedar`, razonamiento `low`, reducción de ruido y transcripción guiada para español y catalán.
 - Puente de voz Python 3.12 para Linux/ARM64, Linux/AMD64 y Windows.
-- Activación offline mediante Vosk. Durante la reproducción correlaciona dos reconocedores en una ventana de audio y admite alias fonéticos terminales con contexto seguro, para recuperar «Tipi» bajo voz solapada sin confundir «tipo», «típico», «sí» o «para ti».
+- Activación offline mediante Vosk. Durante la reproducción correlaciona un reconocedor abierto con una gramática contrastiva que incluye los confusores, y solo recupera alias finales largos con un cierre abierto reciente y seguro. Así oye «Tipi» bajo voz solapada sin confiar ciegamente en «tipo», «típico», «sí» o «para ti».
 - Consulta híbrida: Realtime resuelve conversación sencilla y delega en OpenClaw cuando necesita memoria, archivos, información actual, herramientas, acciones o verificación.
 - Interrupción local: decir «Tipi» durante una respuesta detiene inmediatamente el audio atrasado y abre un nuevo turno. La consulta activa se conserva para poder corregirla o ampliarla.
 - Cierre local con «cállate», «para», «silencio», «prou» y variantes inequívocas.

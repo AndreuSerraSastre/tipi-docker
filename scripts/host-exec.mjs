@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { unsafeSelfMutationReason } from "./host-exec-safety.mjs";
+
 const args = process.argv.slice(2);
 let timeoutSeconds = 300;
 let cwd = "";
@@ -26,6 +28,16 @@ if (!command) {
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600) {
   console.error("El timeout debe estar entre 1 y 3600 segundos.");
   process.exit(2);
+}
+
+const safetyReason = unsafeSelfMutationReason(command);
+if (safetyReason) {
+  console.error(`Operaci\u00f3n bloqueada: ${safetyReason}.`);
+  console.error(
+    "Para recuperar todo Tipi usa systemctl restart --no-block tipi.service; " +
+      "para la voz act\u00faa solo sobre tipi-voice y usa --no-deps al arrancarla.",
+  );
+  process.exit(126);
 }
 
 const projectRoot = process.env.TIPI_PROJECT_ROOT || "/tipi-project";

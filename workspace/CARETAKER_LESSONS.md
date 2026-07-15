@@ -56,6 +56,30 @@ Este archivo conserva el aprendizaje técnico del modo cuidador. No se borran lo
 - Corrección aplicada: las evidencias contextual y restringida se correlacionan durante 1,25 s medidos en muestras de audio, por lo que pueden llegar en bloques distintos. Un alias fonético inequívoco al final de la hipótesis abierta también interrumpe sin esperar al segundo reconocedor; se rechaza si viene después de «tipo/tipos/típica/típico» o si lleva texto ordinario detrás. Las pistas menos claras siguen necesitando ambos reconocedores.
 - Prueba final: 61 pruebas ARM64 y una omitida; la grabación física obtuvo tres activaciones de tres y cero activaciones en una pista continua con seis repeticiones de «Sí, ese tipo típico es para ti». La señal directa obtuvo tres activaciones y 24 ejecuciones independientes de esa pista negativa, 144 frases conflictivas en total, sin falsos despertares.
 - Regla reutilizable: todo cambio de palabra de activación debe superar señal directa, confusores repetidos y un bucle acústico con los altavoces y el micrófono reales; las hipótesis de ASR deben correlacionarse por tiempo de audio y no por número rígido de callbacks.
+- Estado: superada por la validación variable y la gramática contrastiva descritas en la lección siguiente.
+
+## 2026-07-15 — una sola toma de sala no demostraba fiabilidad
+
+- Fecha y desencadenante: repetición pública de la prueba de sala después de publicar el detector que había obtenido tres aciertos en la primera grabación.
+- Observación y evidencia: una segunda toma física obtuvo dos activaciones de tres. En la tercera, el reconocedor abierto terminó en `esta voces`, mientras el restringido reconoció un `tipi` de 450 ms con confianza alta; la regla de consenso lo descartó porque faltaba el alias abierto.
+- Qué se hizo bien: el script conservó la grabación fallida y restauró la voz sana; se compararon resultados completos, confianza, tiempos de palabra, dos tomas positivas, pistas conflictivas y un corpus conversacional de sala antes de cambiar el umbral.
+- Qué se hizo mal o se asumió sin pruebas: se trató un único resultado de tres sobre tres como validación física suficiente. La confianza del reconocedor restringido tampoco era discriminante: los confusores forzados llegaban a 1,0.
+- Impacto real o potencial: según la variación acústica, una de cada varias interrupciones podía perderse y Tipi seguía hablando, que era el fallo comunicado por el usuario.
+- Corrección aplicada: la gramática de reproducción ahora contrasta `tipi` y sus alias con `tipo`, `típico`, `sí`, `ti`, `para` y otros confusores. Un resultado final aislado solo se recupera si dura al menos 380 ms y llega dentro de 750 ms de un final abierto reciente sin contexto `tipo/típico`; parciales y alias breves siguen sin decidir solos.
+- Prueba final: 65 pruebas ARM64 y una omitida; cuatro tomas físicas positivas dieron tres de tres, cuatro pistas conflictivas dieron cero, dos minutos de conversación española a volumen máximo dieron cero y 24 decodificaciones de seis confusores, 144 frases, dieron cero falsos despertares.
+- Regla reutilizable: repetir capturas físicas independientes y conservar cada fallo; no usar confianza de una gramática pequeña como probabilidad real y exigir evidencia temporal, léxica y de duración.
+- Estado: vigente.
+
+## 2026-07-15 — el cuidador no puede recrear el contenedor que lo ejecuta
+
+- Fecha y desencadenante: heartbeat autónomo concurrente con pruebas que detenían intencionadamente la voz.
+- Observación y evidencia: el cuidador inició una recreación de Compose que detuvo `tipi-openclaw-gateway-1`; al morir el proceso que estaba ejecutando la operación, el reemplazo quedó en estado `Created` y la voz perdió DNS hasta que se completó la recreación desde SSH.
+- Qué se hizo bien: `voice-desired-state` evitó confundir la parada de audio con una petición permanente, se guardó el estado no sensible de ambos contenedores y la voz reintentó la conexión hasta recuperar el gateway.
+- Qué se hizo mal o se asumió sin pruebas: se concedió autoridad para usar Compose sin distinguir que una operación iniciada dentro del gateway no sobrevive al borrado de su propio cgroup.
+- Impacto real o potencial: OpenClaw quedó detenido y Tipi no podía conversar aunque el contenedor de voz seguía ejecutándose.
+- Corrección aplicada: `host-exec.mjs` bloquea ciclos Compose que puedan incluir el gateway, Docker directo sobre ese contenedor y los scripts de instalación/parada/actualización ejecutados desde dentro. La recuperación completa se delega a `systemctl restart --no-block tipi.service`, que systemd termina fuera del cgroup; la voz puede recuperarse aisladamente con `--no-deps`.
+- Prueba final: 20 casos unitarios permiten inspección, CLI segura, systemd y operaciones aisladas de voz, y bloquean también el comando real `up --force-recreate tipi-voice` sin `--no-deps`, recreaciones completas, `down`, reinicio directo del gateway y scripts de ciclo de vida. El gateway recuperado y Tipi Voice volvieron a `healthy`.
+- Regla reutilizable: un servicio no debe ejecutar sincrónicamente la orden que elimina su propio entorno; delegar el reemplazo a un supervisor externo y aplicar la restricción también en código, no solo en instrucciones.
 - Estado: vigente.
 
 ## 2026-07-15 — la consulta del agente bloqueaba su propio resultado

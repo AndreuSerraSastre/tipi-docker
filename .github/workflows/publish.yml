@@ -38,6 +38,7 @@ jobs:
       - run: shellcheck -e SC1091 scripts/*.sh voice/entrypoint.sh
       - run: node --check gateway/patch-spanish-realtime.mjs
       - run: node --check scripts/host-exec.mjs
+      - run: node --test scripts/host-exec-safety.test.mjs
       - run: node --check scripts/sync-openclaw-config.mjs
       - name: Validar Compose y configuración
         run: |

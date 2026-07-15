@@ -36,6 +36,7 @@ class Settings:
     output_channels: int
     vad_mode: int
     barge_in: bool
+    speaker_voice: str
     health_file: Path | None
     log_dir: Path
     log_level: str
@@ -69,6 +70,7 @@ class Settings:
             output_channels=int(os.getenv("TIPI_OUTPUT_CHANNELS", "2")),
             vad_mode=max(0, min(3, int(os.getenv("TIPI_VAD_MODE", "2")))),
             barge_in=_as_bool(os.getenv("TIPI_BARGE_IN"), False),
+            speaker_voice=os.getenv("TIPI_REALTIME_SPEAKER_VOICE", "cedar").strip() or "cedar",
             health_file=Path(health_raw) if health_raw else None,
             log_dir=log_dir,
             log_level=os.getenv("TIPI_LOG_LEVEL", "INFO").upper(),

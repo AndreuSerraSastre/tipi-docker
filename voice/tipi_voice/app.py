@@ -20,6 +20,7 @@ from .conversation_log import ConversationLogger
 from .gateway import GatewayClient, GatewayError
 from .identity import DeviceIdentity
 from .intents import is_plausible_visitor_transcript, is_stop_command
+from .voices import voice_answer_for
 from .wake import WakeWordDetector
 
 LOGGER = logging.getLogger(__name__)
@@ -431,6 +432,17 @@ class TipiVoiceApp:
                 return
             args = self._parse_args(event.get("args"))
             question = self._consult_question(args)
+            local_answer = voice_answer_for(question, self.settings.speaker_voice)
+            if local_answer:
+                self.conversation_log.event(
+                    "RESPUESTA_LOCAL",
+                    local_answer,
+                    turno=self._turn_number,
+                    consulta=question,
+                    motivo="voces_realtime",
+                )
+                await self._submit_tool_result(session_id, call_id, {"result": local_answer})
+                return
             self._turn_consulted = True
             self.conversation_log.event(
                 "OPENCLAW_CONSULTA",
@@ -477,6 +489,30 @@ class TipiVoiceApp:
                 duracion_ms=self._elapsed_ms(tool_started_at),
             )
             await self._submit_tool_result(session_id, call_id, {"result": answer})
+        except TimeoutError as exc:
+            LOGGER.warning("La consulta del agente agoto el tiempo de espera")
+            self.conversation_log.event(
+                "OPENCLAW_TIMEOUT",
+                str(exc),
+                turno=self._turn_number,
+                duracion_ms=self._elapsed_ms(tool_started_at),
+            )
+            with suppress(Exception):
+                await self._submit_tool_result(session_id, call_id, {"error": str(exc)})
+        except GatewayError as exc:
+            message = str(exc)
+            if not self.session_id or "aborted" in message.lower():
+                LOGGER.info("Consulta del agente cancelada por cierre de conversacion")
+            else:
+                LOGGER.exception("Fallo la consulta del agente")
+            self.conversation_log.event(
+                "OPENCLAW_ERROR",
+                message,
+                turno=self._turn_number,
+                duracion_ms=self._elapsed_ms(tool_started_at),
+            )
+            with suppress(Exception):
+                await self._submit_tool_result(session_id, call_id, {"error": message})
         except Exception as exc:
             LOGGER.exception("Falló la consulta del agente")
             self.conversation_log.event(

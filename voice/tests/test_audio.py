@@ -22,7 +22,7 @@ def test_enqueue_output_marks_playback_before_worker_runs() -> None:
 
 def test_output_done_arms_echo_guard_and_discards_partial_input() -> None:
     app = object.__new__(TipiVoiceApp)
-    app.settings = SimpleNamespace(output_echo_guard_seconds=0.8)
+    app.settings = SimpleNamespace(output_echo_guard_seconds=1.2)
     app.last_activity = 0.0
     app._output_echo_guard_until = 0.0
     app._speech_started_at = 1.0
@@ -32,7 +32,7 @@ def test_output_done_arms_echo_guard_and_discards_partial_input() -> None:
 
     app._on_output_done()
 
-    assert app._output_echo_guard_until >= before + 0.8
+    assert app._output_echo_guard_until >= before + 1.2
     assert app._speech_started_at is None
     assert not app._realtime_buffer
 

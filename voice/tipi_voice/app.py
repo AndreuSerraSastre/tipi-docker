@@ -280,6 +280,8 @@ class TipiVoiceApp:
                     )
                     await self._cancel_output(reason="duplicate-direct-response")
                 return
+            if not self.audio.is_playing.is_set():
+                self._discard_pending_microphone_audio()
             self._mark_activity()
             if self._turn_user_final_at is not None and self._turn_first_audio_ms is None:
                 self._turn_first_audio_ms = self._elapsed_ms(self._turn_user_final_at)
@@ -389,9 +391,7 @@ class TipiVoiceApp:
             if name == "openclaw_agent_consult":
                 self._turn_consulted = True
                 if not self.pending_tools:
-                    self._consult_wait_message_finished = False
-                    self._consult_result_ready = False
-                    self._consult_wait_output_cancelled = False
+                    self._begin_consult_wait()
             if (
                 call_id
                 and name == "openclaw_agent_consult"
@@ -779,10 +779,30 @@ class TipiVoiceApp:
     def _should_suppress_consult_wait_output(self) -> bool:
         return self._consult_wait_message_finished and not self._consult_result_ready
 
+    def _begin_consult_wait(self) -> None:
+        # Realtime may finish saying "Un momento" immediately before the
+        # toolCall event arrives. Count that response as the waiting message.
+        self._consult_wait_message_finished = self._direct_response_finished
+        self._consult_result_ready = False
+        self._consult_wait_output_cancelled = False
+        self._direct_response_finished = False
+
     def _allow_consult_result_output(self) -> None:
         self._consult_result_ready = True
         self._consult_wait_output_cancelled = False
         self._direct_response_finished = False
+
+    def _discard_pending_microphone_audio(self) -> None:
+        self._speech_started_at = None
+        self._realtime_rate_state = None
+        self._realtime_buffer.clear()
+        if self._audio_sender_queue is None:
+            return
+        while True:
+            try:
+                self._audio_sender_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
 
     def _on_output_done(self) -> None:
         self._mark_activity()

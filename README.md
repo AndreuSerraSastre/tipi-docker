@@ -110,7 +110,7 @@ El repositorio público es <https://github.com/AndreuSerraSastre/tipi-docker>. L
 - `TIPI_IDLE_TIMEOUT_SECONDS=5`: tiempo sin actividad antes de cerrar Realtime.
 - `TIPI_WAKE_WORDS=tipi,tipy,tip,tippi,tippy`: variantes de activación.
 - `TIPI_BARGE_IN=false`: semidúplex recomendado con altavoces para evitar eco.
-- `TIPI_OUTPUT_ECHO_GUARD_SECONDS=0.8`: descarta el eco residual del altavoz al terminar cada respuesta.
+- `TIPI_OUTPUT_ECHO_GUARD_SECONDS=1.2`: descarta el eco residual del altavoz al terminar cada respuesta.
 - `TIPI_VAD_MODE=0..3`: sensibilidad local; `3` es la más estricta.
 - `TIPI_REALTIME_SPEAKER_VOICE=cedar`: voz de OpenAI Realtime. Opciones habituales: `marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer` y `verse`; `marin` y `cedar` son las recomendadas. El cambio se aplica en una nueva sesión.
 - `TIPI_REALTIME_NOISE_REDUCTION=near_field|far_field|off`: `near_field` para cascos y `far_field` para el micrófono de sala del robot.

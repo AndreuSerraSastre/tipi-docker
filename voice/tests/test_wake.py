@@ -233,7 +233,33 @@ def test_playback_consensus_recovers_overlapped_wake_word(monkeypatch) -> None:
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert not detector.feed(b"mixed", strict=True)
+    assert not detector.feed(b"mixed", strict=True)
+    assert not detector.feed(b"mixed", strict=True)
     assert detector.feed(b"mixed", strict=True)
+
+
+def test_playback_consensus_rejects_isolated_complete_guess(monkeypatch) -> None:
+    class OpenRecognizer:
+        def AcceptWaveform(self, _pcm: bytes) -> bool:
+            return True
+
+        def Result(self) -> str:
+            return json.dumps({"text": "si ese tipo tv party"})
+
+    class PlaybackRecognizer(OpenRecognizer):
+        def Result(self) -> str:
+            return json.dumps({"text": "tipi tipi"})
+
+    detector = WakeWordDetector.__new__(WakeWordDetector)
+    detector.words = {"tipi"}
+    detector.recognizer = OpenRecognizer()
+    detector.playback_recognizer = PlaybackRecognizer()
+    detector._rate_state = None
+    detector._last_trigger = 0.0
+    detector._partial_wake_hits = 0
+    monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
+
+    assert not detector.feed(b"ordinary", strict=True)
 
 
 def test_playback_consensus_rejects_similar_ordinary_word(monkeypatch) -> None:
@@ -263,8 +289,12 @@ def test_playback_consensus_rejects_similar_ordinary_word(monkeypatch) -> None:
 
 def test_playback_acoustic_cue_rejects_common_similar_words() -> None:
     assert matches_playback_acoustic_cue("voy a explicar tv")
+    assert matches_playback_acoustic_cue("tv callate")
     assert matches_playback_acoustic_cue("ti para")
     assert not matches_playback_acoustic_cue("sí claro")
     assert not matches_playback_acoustic_cue("este tipo")
     assert not matches_playback_acoustic_cue("la típica solución")
     assert not matches_playback_acoustic_cue("para ti tenemos algo")
+    assert not matches_playback_acoustic_cue("si ese tipo tv")
+    assert not matches_playback_acoustic_cue("si ese tipo tv marti")
+    assert not matches_playback_acoustic_cue("tv marti")

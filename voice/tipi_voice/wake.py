@@ -13,10 +13,11 @@ from vosk import KaldiRecognizer, Model, SetLogLevel
 
 NORMAL_WAKE_COOLDOWN_SECONDS = 2.0
 PLAYBACK_WAKE_COOLDOWN_SECONDS = 0.45
-PLAYBACK_PARTIAL_HITS = 2
+PLAYBACK_PARTIAL_HITS = 4
 _PLAYBACK_GRAMMAR_WORDS = {"tipi", "tip"}
 _PLAYBACK_ACOUSTIC_TOKENS = {"tv", "pipi", "tibi"}
 _PLAYBACK_COMMAND_TOKENS = {"calla", "callate", "escucha", "para", "silencio"}
+_PLAYBACK_FALSE_PREDECESSORS = {"tipo", "tipos", "tipica", "tipico"}
 
 
 def normalize_phrase(value: str) -> str:
@@ -36,8 +37,16 @@ def matches_wake_phrase(phrase: str, words: set[str], *, strict: bool = False) -
 def matches_playback_acoustic_cue(phrase: str) -> bool:
     """Filtra la gramática sensible con una segunda transcripción abierta."""
     tokens = normalize_phrase(phrase).split()
-    if any(token in _PLAYBACK_ACOUSTIC_TOKENS for token in tokens):
-        return True
+    for index, token in enumerate(tokens):
+        if token not in _PLAYBACK_ACOUSTIC_TOKENS:
+            continue
+        if index and tokens[index - 1] in _PLAYBACK_FALSE_PREDECESSORS:
+            continue
+        if index == len(tokens) - 1 or any(
+            following in _PLAYBACK_COMMAND_TOKENS
+            for following in tokens[index + 1 : index + 3]
+        ):
+            return True
     return bool(
         tokens
         and tokens[0] == "ti"
@@ -107,19 +116,20 @@ class WakeWordDetector:
             and matches_playback_acoustic_cue(phrase)
         )
         match = direct_match or fallback_match
-        match_complete = (direct_match and complete) or (
-            fallback_match and playback_complete
-        )
-        if not match_complete:
-            # During playback there may be no silence for Vosk to close the
-            # utterance. Partial text grows ("tipi" -> "tipi para"), so count
-            # consecutive hypotheses containing the wake word rather than
-            # requiring the complete hypothesis to remain byte-for-byte equal.
-            self._partial_wake_hits = self._partial_wake_hits + 1 if match else 0
-            required_hits = 1 if direct_match else PLAYBACK_PARTIAL_HITS
-            if self._partial_wake_hits < required_hits:
+        if not match:
+            self._partial_wake_hits = 0
+            return False
+        if fallback_match and not direct_match:
+            # The constrained recognizer can force an ordinary final word into
+            # "tipi". Require a stable run even when both recognizers just
+            # closed an utterance; a genuine short name remains stable across
+            # several 20 ms frames, while guesses such as "tipico" mutate.
+            self._partial_wake_hits += 1
+            if self._partial_wake_hits < PLAYBACK_PARTIAL_HITS:
                 return False
         else:
+            # An exact match from the open recognizer is independent evidence
+            # and should stop playback on its first partial hypothesis.
             self._partial_wake_hits = 0
         if match:
             self._last_trigger = time.monotonic()

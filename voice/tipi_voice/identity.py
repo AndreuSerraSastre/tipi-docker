@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 
 
 def _b64url(data: bytes) -> str:
@@ -47,7 +52,15 @@ class DeviceIdentity:
             "privateKey": _b64url(private_raw),
             "publicKey": _b64url(public_raw),
         }
-        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary = path.with_suffix(".tmp")
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(payload, indent=2) + "\n")
+        temporary.replace(path)
         try:
             os.chmod(path, 0o600)
         except OSError:
@@ -90,4 +103,3 @@ def build_auth_payload(
         device_family.strip().lower(),
     ]
     return "|".join(values)
-

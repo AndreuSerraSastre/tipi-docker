@@ -3,11 +3,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/lib-tipi.sh"
 
 marker='data/openclaw/workspace/.tipi-bootstrap-v1'
 workspace='data/openclaw/workspace'
 attestation='data/openclaw/workspace-attestations/cddce8bd7eebfe25e3f3e5cf0f37a0822fa900fa1864cc27b3e2d6b7e3fb6b4b.attested'
-[[ -f "$marker" ]] && exit 0
+
+configured() {
+  [[ -f "$workspace/IDENTITY.md" ]] \
+    && [[ -f "$workspace/USER.md" ]] \
+    && [[ -f "$workspace/MEMORY.md" ]] \
+    && grep -q 'Tipi' "$workspace/IDENTITY.md" \
+    && grep -q 'Andreu' "$workspace/USER.md" \
+    && [[ ! -f "$workspace/BOOTSTRAP.md" ]]
+}
+
+if configured; then
+  printf '%s\n' 'tipi-bootstrap-v1' > "$marker"
+  exit 0
+fi
 
 # Migración desde la antigua carpeta superpuesta. La ruta es la atestación
 # SHA-256 exacta de /home/node/.openclaw/workspace y nunca se borra si hay datos.
@@ -15,12 +29,13 @@ if [[ -f "$attestation" ]] && [[ -z "$(find "$workspace" -mindepth 1 -maxdepth 1
   rm -f -- "$attestation"
 fi
 
-files=(-f compose.yaml -f compose.registry.yaml)
+thinking="$(tipi_get_env TIPI_OPENCLAW_THINKING)"
+thinking="${thinking:-low}"
 run_turn() {
-  docker compose "${files[@]}" --profile tools run --rm --no-deps \
+  tipi_compose --profile tools run --rm --no-deps \
     openclaw-cli agent \
     --session-key agent:main:tipi-onboarding \
-    --thinking medium \
+    --thinking "$thinking" \
     --timeout 300 \
     --message "$1"
 }
@@ -32,15 +47,6 @@ run_turn 'Hola. Acabas de iniciar por primera vez. Sigue tu ritual de BOOTSTRAP.
 echo 'Respondiendo automáticamente con la información del proyecto Tipi...'
 answers="$(< config/tipi-bootstrap-answers.md)"
 run_turn "$answers"
-
-configured() {
-  [[ -f "$workspace/IDENTITY.md" ]] \
-    && [[ -f "$workspace/USER.md" ]] \
-    && [[ -f "$workspace/MEMORY.md" ]] \
-    && grep -q 'Tipi' "$workspace/IDENTITY.md" \
-    && grep -q 'Andreu' "$workspace/USER.md" \
-    && [[ ! -f "$workspace/BOOTSTRAP.md" ]]
-}
 
 if ! configured; then
   run_turn 'Finaliza ahora el onboarding: escribe IDENTITY.md, USER.md, SOUL.md y una MEMORY.md pública con lo que ya te he explicado; crea la nota diaria de memoria y elimina BOOTSTRAP.md. Después confirma brevemente que has terminado.'

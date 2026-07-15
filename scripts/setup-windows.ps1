@@ -63,6 +63,8 @@ function Read-RealtimeKey {
 
 if (-not (Test-Path -LiteralPath '.env')) {
     Copy-Item -LiteralPath '.env.example' -Destination '.env'
+}
+if (-not (Get-EnvValue 'OPENCLAW_GATEWAY_TOKEN')) {
     $tokenBytes = [byte[]]::new(32)
     $tokenGenerator = [Security.Cryptography.RandomNumberGenerator]::Create()
     try { $tokenGenerator.GetBytes($tokenBytes) }
@@ -153,7 +155,9 @@ if (-not (Get-EnvValue 'TIPI_OUTPUT_DEVICE')) {
 Write-Host ''
 Write-Host 'Paso 4 de 4: arrancando y comprobando Tipi.'
 docker compose up -d openclaw-gateway
-docker compose --profile tools run --rm --no-deps openclaw-cli models set openai/gpt-5.6-sol
+$model = Get-EnvValue 'TIPI_OPENCLAW_MODEL'
+if (-not $model) { $model = 'openai/gpt-5.6-luna' }
+docker compose --profile tools run --rm --no-deps openclaw-cli models set $model
 docker compose up -d --force-recreate --wait openclaw-gateway
 if ($LASTEXITCODE -ne 0) { throw 'OpenClaw no superó la comprobación de salud.' }
 & (Join-Path $PSScriptRoot 'bootstrap-openclaw-windows.ps1')
@@ -163,9 +167,16 @@ if ($LASTEXITCODE -ne 0) { throw 'OpenClaw no superó la comprobación de salud.
 if ($LASTEXITCODE -ne 0) {
     $devicesRaw = docker compose --profile tools run --rm --no-deps openclaw-cli devices list --json | Out-String
     $devicesStart = $devicesRaw.IndexOf('{')
-    if ($devicesStart -ge 0) {
+    $identityPath = Join-Path $ProjectRoot 'data\voice\device-identity.json'
+    $expectedDeviceId = if (Test-Path -LiteralPath $identityPath) {
+        (Get-Content -LiteralPath $identityPath -Raw -Encoding utf8 | ConvertFrom-Json).deviceId
+    }
+    else { '' }
+    if ($devicesStart -ge 0 -and $expectedDeviceId) {
         $devices = $devicesRaw.Substring($devicesStart) | ConvertFrom-Json
-        foreach ($pending in @($devices.pending | Where-Object { $_.displayName -eq 'Tipi Voice' })) {
+        foreach ($pending in @($devices.pending | Where-Object {
+            $_.displayName -eq 'Tipi Voice' -and $_.deviceId -eq $expectedDeviceId
+        })) {
             docker compose --profile tools run --rm --no-deps openclaw-cli devices approve $pending.requestId
         }
     }

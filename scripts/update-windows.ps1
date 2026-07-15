@@ -23,23 +23,44 @@ $imageLine = [IO.File]::ReadAllLines((Join-Path $ProjectRoot '.env')) |
     Where-Object { $_.StartsWith('OPENCLAW_IMAGE=') } |
     Select-Object -First 1
 $openclawImage = if ($imageLine) { $imageLine.Substring('OPENCLAW_IMAGE='.Length).Trim() } else { '' }
-$oldImage = if ($openclawImage) {
-    docker image inspect $openclawImage --format '{{.Id}}' 2>$null
-} else { '' }
+$gatewayContainer = (docker compose ps -q openclaw-gateway | Out-String).Trim()
+$oldImage = if ($gatewayContainer) {
+    (docker inspect $gatewayContainer --format '{{.Image}}' 2>$null | Out-String).Trim()
+}
+elseif ($openclawImage) {
+    (docker image inspect $openclawImage --format '{{.Id}}' 2>$null | Out-String).Trim()
+}
+else { '' }
+
+New-Item -ItemType Directory -Force -Path 'data\maintenance' | Out-Null
+$runtimeConfig = Join-Path $ProjectRoot 'data\openclaw\openclaw.json'
+$configBackup = Join-Path $ProjectRoot 'data\maintenance\last-good-openclaw.json'
+$configBackedUp = Test-Path -LiteralPath $runtimeConfig
+if ($configBackedUp) {
+    Copy-Item -LiteralPath $runtimeConfig -Destination $configBackup -Force
+}
 
 $isLocalImage = $openclawImage.EndsWith(':local')
 if ($isLocalImage) {
     docker compose build --pull openclaw-gateway
-    if ($LASTEXITCODE -ne 0) { throw 'No se pudo comprobar la actualizacion local de OpenClaw.' }
+    $updateExit = $LASTEXITCODE
 } else {
     docker compose pull openclaw-gateway
-    if ($LASTEXITCODE -ne 0) { throw 'No se pudo comprobar la actualización de OpenClaw.' }
+    $updateExit = $LASTEXITCODE
+}
+if ($updateExit -ne 0) {
+    if (-not $oldImage) { throw 'No se pudo obtener OpenClaw y no existe una imagen anterior.' }
+    Write-Warning 'No se pudo comprobar la actualización; se usará la imagen que ya funcionaba.'
+    $env:OPENCLAW_IMAGE = $oldImage
 }
 
 docker compose up -d --wait --remove-orphans openclaw-gateway
 if ($LASTEXITCODE -ne 0) {
     if (-not $oldImage) { throw 'La actualización no arrancó y no existe una imagen anterior.' }
     Write-Warning 'La actualización falló. Recuperando la imagen anterior de OpenClaw.'
+    if ($configBackedUp) {
+        Copy-Item -LiteralPath $configBackup -Destination $runtimeConfig -Force
+    }
     $env:OPENCLAW_IMAGE = $oldImage.Trim()
     docker compose -f compose.yaml -f compose.rollback.yaml up -d --wait openclaw-gateway
     if ($LASTEXITCODE -ne 0) { throw 'También falló la recuperación automática.' }

@@ -5,7 +5,6 @@ import audioop
 import base64
 import json
 import logging
-import os
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -13,6 +12,7 @@ from typing import Any
 
 import webrtcvad
 
+from . import __version__
 from .audio import AudioEngine
 from .audio_controls import AudioAdjustment, AudioLevelStore, SystemAudioController
 from .config import Settings
@@ -20,7 +20,7 @@ from .conversation_log import ConversationLogger
 from .gateway import GatewayClient, GatewayError
 from .identity import DeviceIdentity
 from .intents import is_plausible_visitor_transcript, is_stop_command
-from .voices import voice_answer_for
+from .voices import VoicePreferenceStore, voice_request_for
 from .wake import WakeWordDetector
 
 LOGGER = logging.getLogger(__name__)
@@ -48,6 +48,9 @@ class TipiVoiceApp:
         self._vad = webrtcvad.Vad(settings.vad_mode)
         self.conversation_log = ConversationLogger(settings.log_dir)
         self.audio_levels = AudioLevelStore(settings.state_dir / "audio-levels.json")
+        self.voice_preferences = VoicePreferenceStore(
+            settings.state_dir / "speaker-voice.json", settings.speaker_voice
+        )
         self._wake_detected_at: float | None = None
         self._session_started_at: float | None = None
         self._speech_started_at: float | None = None
@@ -62,6 +65,7 @@ class TipiVoiceApp:
         self._consult_wait_message_finished = False
         self._consult_result_ready = False
         self._consult_wait_output_cancelled = False
+        self._suppress_output_until_user = False
 
     async def run(self) -> None:
         self.settings.validate()
@@ -72,47 +76,57 @@ class TipiVoiceApp:
             sensibilidad_microfono=self.audio_levels.microphone_level,
             volumen_salida=self.audio_levels.output_level,
         )
-        identity = DeviceIdentity.load_or_create(self.settings.state_dir)
-        self.gateway = GatewayClient(
-            self.settings.gateway_url, self.settings.gateway_token, identity
-        )
-        await self.gateway.connect()
-        self.gateway.on("talk.event", self._handle_talk_event)
-
-        self.wake = WakeWordDetector(self.settings.vosk_model, self.settings.wake_words)
-        loop = asyncio.get_running_loop()
-        self.audio = AudioEngine(
-            loop=loop,
-            input_queue=self.mic_queue,
-            input_device=self.settings.input_device,
-            output_device=self.settings.output_device,
-            input_rate=self.settings.input_sample_rate,
-            output_rate=self.settings.output_sample_rate,
-            output_channels=self.settings.output_channels,
-            on_output_done=self._on_output_done,
-        )
-        self.system_audio = SystemAudioController(
-            self.audio.input_device_name,
-            self.audio.output_device_name,
-        )
-        self._set_active_audio_level("microfono", self.audio_levels.microphone_level)
-        self._set_active_audio_level("salida", self.audio_levels.output_level)
-        self.audio.start()
-        self.audio.play_startup_chime()
-        await asyncio.sleep(0.65)
-        while not self.mic_queue.empty():
-            with suppress(asyncio.QueueEmpty):
-                self.mic_queue.get_nowait()
-        LOGGER.info('Tipi está atento. Di "%s" para hablar.', self.settings.wake_words[0])
-        LOGGER.info("Registro de conversación: %s", self.conversation_log.latest_readable_path)
-
-        tasks = [
-            asyncio.create_task(self._microphone_loop(), name="microphone-loop"),
-            asyncio.create_task(self._inactivity_loop(), name="inactivity-loop"),
-            asyncio.create_task(self._health_loop(), name="health-loop"),
-            asyncio.create_task(self.gateway.disconnected.wait(), name="gateway-watch"),
-        ]
+        tasks: list[asyncio.Task[Any]] = []
         try:
+            identity = DeviceIdentity.load_or_create(self.settings.state_dir)
+            self.gateway = GatewayClient(
+                self.settings.gateway_url, self.settings.gateway_token, identity
+            )
+            await self.gateway.connect()
+            self.gateway.on("talk.event", self._handle_talk_event)
+
+            self.wake = WakeWordDetector(
+                self.settings.vosk_model, self.settings.wake_words
+            )
+            loop = asyncio.get_running_loop()
+            self.audio = AudioEngine(
+                loop=loop,
+                input_queue=self.mic_queue,
+                input_device=self.settings.input_device,
+                output_device=self.settings.output_device,
+                input_rate=self.settings.input_sample_rate,
+                output_rate=self.settings.output_sample_rate,
+                output_channels=self.settings.output_channels,
+                on_output_done=self._on_output_done,
+            )
+            self.system_audio = SystemAudioController(
+                self.audio.input_device_name,
+                self.audio.output_device_name,
+            )
+            self._set_active_audio_level(
+                "microfono", self.audio_levels.microphone_level
+            )
+            self._set_active_audio_level("salida", self.audio_levels.output_level)
+            self.audio.start()
+            self.audio.play_startup_chime()
+            await asyncio.sleep(0.65)
+            self._drain_microphone_queue()
+            LOGGER.info(
+                'Tipi está atento. Di "%s" para hablar.', self.settings.wake_words[0]
+            )
+            LOGGER.info(
+                "Registro de conversación: %s",
+                self.conversation_log.latest_readable_path,
+            )
+
+            tasks = [
+                asyncio.create_task(self._microphone_loop(), name="microphone-loop"),
+                asyncio.create_task(self._inactivity_loop(), name="inactivity-loop"),
+                asyncio.create_task(self._health_loop(), name="health-loop"),
+                asyncio.create_task(
+                    self.gateway.disconnected.wait(), name="gateway-watch"
+                ),
+            ]
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 error = task.exception()
@@ -123,11 +137,12 @@ class TipiVoiceApp:
         finally:
             for task in tasks:
                 task.cancel()
-            if self.audio:
-                self.audio.prepare_stop()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             await self._close_session(notify_gateway=True, reason="aplicación detenida")
             if self.audio:
-                self.audio.stop()
+                with suppress(Exception):
+                    self.audio.stop()
             if self.gateway:
                 await self.gateway.close()
             self.conversation_log.event("APAGADO", "Tipi Voice detenido")
@@ -175,13 +190,16 @@ class TipiVoiceApp:
                 "mode": "realtime",
                 "transport": "gateway-relay",
                 "brain": "agent-consult",
+                "voice": self.voice_preferences.voice,
             },
             timeout=30,
         )
         session_id = result.get("relaySessionId") or result.get("sessionId")
         if not session_id:
             raise GatewayError("OpenClaw no devolvió un identificador de Talk")
-        audio_format = result.get("audio") if isinstance(result.get("audio"), dict) else {}
+        audio_format = (
+            result.get("audio") if isinstance(result.get("audio"), dict) else {}
+        )
         output_encoding = str(audio_format.get("outputEncoding") or "pcm16").lower()
         output_rate = int(audio_format.get("outputSampleRateHz") or 24_000)
         output_channels = int(audio_format.get("outputChannels") or 1)
@@ -196,14 +214,18 @@ class TipiVoiceApp:
         self._realtime_rate_state = None
         self._realtime_buffer.clear()
         self._audio_sender_queue = asyncio.Queue(maxsize=40)
-        self._audio_sender_task = asyncio.create_task(self._audio_sender(), name="audio-sender")
+        self._audio_sender_task = asyncio.create_task(
+            self._audio_sender(), name="audio-sender"
+        )
         LOGGER.info("Conversación Realtime iniciada")
         self.conversation_log.event(
             "SESION_INICIADA",
             "Conversación Realtime preparada",
             conexion_ms=self._elapsed_ms(create_started_at),
             desde_activacion_ms=(
-                self._elapsed_ms(self._wake_detected_at) if self._wake_detected_at else None
+                self._elapsed_ms(self._wake_detected_at)
+                if self._wake_detected_at
+                else None
             ),
             sesion=session_id[:8],
         )
@@ -225,7 +247,9 @@ class TipiVoiceApp:
             batch = bytes(self._realtime_buffer[:REALTIME_BATCH_BYTES])
             del self._realtime_buffer[:REALTIME_BATCH_BYTES]
             if self._audio_sender_queue.full():
-                LOGGER.warning("Se descarta audio porque el Gateway no responde a tiempo")
+                LOGGER.warning(
+                    "Se descarta audio porque el Gateway no responde a tiempo"
+                )
                 with suppress(asyncio.QueueEmpty):
                     self._audio_sender_queue.get_nowait()
             self._audio_sender_queue.put_nowait(batch)
@@ -256,10 +280,14 @@ class TipiVoiceApp:
             return
         if event_type == "audio" and event.get("audioBase64"):
             assert self.audio is not None
+            if self._suppress_output_until_user:
+                return
             if self._should_suppress_consult_wait_output():
                 if not self._consult_wait_output_cancelled:
                     self._consult_wait_output_cancelled = True
-                    LOGGER.warning("Se bloqueó una respuesta adicional mientras OpenClaw trabaja")
+                    LOGGER.warning(
+                        "Se bloqueó una respuesta adicional mientras OpenClaw trabaja"
+                    )
                     self.conversation_log.event(
                         "RESPUESTA_ESPERA_BLOQUEADA",
                         "Realtime intentó volver a hablar antes del resultado de OpenClaw",
@@ -272,7 +300,9 @@ class TipiVoiceApp:
             if self._is_duplicate_direct_response():
                 if not self._duplicate_output_cancelled:
                     self._duplicate_output_cancelled = True
-                    LOGGER.warning("Se bloqueó una segunda respuesta Realtime sin nueva pregunta")
+                    LOGGER.warning(
+                        "Se bloqueó una segunda respuesta Realtime sin nueva pregunta"
+                    )
                     self.conversation_log.event(
                         "RESPUESTA_DUPLICADA_BLOQUEADA",
                         "Realtime intentó hablar otra vez sin una nueva intervención",
@@ -281,9 +311,14 @@ class TipiVoiceApp:
                     await self._cancel_output(reason="duplicate-direct-response")
                 return
             if not self.audio.is_playing.is_set():
+                if self.wake:
+                    self.wake.reset()
                 self._discard_pending_microphone_audio()
             self._mark_activity()
-            if self._turn_user_final_at is not None and self._turn_first_audio_ms is None:
+            if (
+                self._turn_user_final_at is not None
+                and self._turn_first_audio_ms is None
+            ):
                 self._turn_first_audio_ms = self._elapsed_ms(self._turn_user_final_at)
                 self.conversation_log.event(
                     "REALTIME_PRIMER_AUDIO",
@@ -311,7 +346,9 @@ class TipiVoiceApp:
                 role = str(event.get("role") or "")
                 if role == "user":
                     if not is_plausible_visitor_transcript(text):
-                        LOGGER.info("Transcripción descartada por idioma inesperado: %s", text)
+                        LOGGER.info(
+                            "Transcripción descartada por idioma inesperado: %s", text
+                        )
                         self.conversation_log.event(
                             "TRANSCRIPCION_DESCARTADA",
                             text,
@@ -320,6 +357,7 @@ class TipiVoiceApp:
                         self._speech_started_at = None
                         return
                     now = time.monotonic()
+                    self._suppress_output_until_user = False
                     self._barge_in_cancelled = False
                     self._turn_number += 1
                     self._turn_user_final_at = now
@@ -342,7 +380,9 @@ class TipiVoiceApp:
                         transcripcion_ms=transcription_ms,
                     )
                     if is_stop_command(text):
-                        LOGGER.info("Orden de silencio detectada; se cierra la conversación")
+                        LOGGER.info(
+                            "Orden de silencio detectada; se cierra la conversación"
+                        )
                         self.conversation_log.event(
                             "ORDEN_SILENCIO",
                             text,
@@ -356,13 +396,17 @@ class TipiVoiceApp:
                         return
                     self._apply_spoken_audio_adjustment(text)
                 else:
+                    if self._suppress_output_until_user:
+                        return
                     if self._should_suppress_consult_wait_output():
                         LOGGER.warning(
                             "Transcripción de espera adicional ignorada: %s", text
                         )
                         return
                     if self._is_duplicate_direct_response():
-                        LOGGER.warning("Transcripción de respuesta duplicada ignorada: %s", text)
+                        LOGGER.warning(
+                            "Transcripción de respuesta duplicada ignorada: %s", text
+                        )
                         return
                     complete_ms = (
                         self._elapsed_ms(self._turn_user_final_at)
@@ -410,7 +454,9 @@ class TipiVoiceApp:
         if event_type == "error":
             message = str(event.get("message", "desconocido"))
             LOGGER.error("Error Realtime: %s", message)
-            self.conversation_log.event("ERROR_REALTIME", message, turno=self._turn_number)
+            self.conversation_log.event(
+                "ERROR_REALTIME", message, turno=self._turn_number
+            )
             await self._close_session(notify_gateway=False, reason="error Realtime")
             return
         if event_type == "close":
@@ -456,22 +502,36 @@ class TipiVoiceApp:
                 return
             if name != "openclaw_agent_consult":
                 await self._submit_tool_result(
-                    session_id, call_id, {"error": f'Herramienta no disponible: "{name}"'}
+                    session_id,
+                    call_id,
+                    {"error": f'Herramienta no disponible: "{name}"'},
                 )
                 return
             args = self._parse_args(event.get("args"))
             question = self._consult_question(args)
-            local_answer = voice_answer_for(question, self.settings.speaker_voice)
-            if local_answer:
+            voice_request = voice_request_for(question, self.voice_preferences.voice)
+            if voice_request:
+                if voice_request.requested_voice:
+                    previous_voice = self.voice_preferences.voice
+                    self.voice_preferences.set(voice_request.requested_voice)
+                    self.conversation_log.event(
+                        "CAMBIO_VOZ",
+                        voice_request.answer,
+                        turno=self._turn_number,
+                        voz_anterior=previous_voice,
+                        voz_nueva=self.voice_preferences.voice,
+                    )
                 self.conversation_log.event(
                     "RESPUESTA_LOCAL",
-                    local_answer,
+                    voice_request.answer,
                     turno=self._turn_number,
                     consulta=question,
                     motivo="voces_realtime",
                 )
                 self._allow_consult_result_output()
-                await self._submit_tool_result(session_id, call_id, {"result": local_answer})
+                await self._submit_tool_result(
+                    session_id, call_id, {"result": voice_request.answer}
+                )
                 return
             self._turn_consulted = True
             self.conversation_log.event(
@@ -510,7 +570,9 @@ class TipiVoiceApp:
             run_id = response.get("runId") or response.get("idempotencyKey")
             if not run_id:
                 raise GatewayError("La consulta a OpenClaw no devolvió runId")
-            answer = await self.gateway.wait_for_chat_result(run_id, timeout=120)
+            answer = await self.gateway.wait_for_chat_result(
+                run_id, timeout=self.settings.agent_timeout_seconds
+            )
             self.conversation_log.event(
                 "OPENCLAW_RESULTADO",
                 answer,
@@ -520,17 +582,21 @@ class TipiVoiceApp:
             )
             self._allow_consult_result_output()
             await self._submit_tool_result(session_id, call_id, {"result": answer})
-        except TimeoutError as exc:
-            LOGGER.warning("La consulta del agente agoto el tiempo de espera")
+        except TimeoutError:
+            message = (
+                "OpenClaw no respondió en "
+                f"{self.settings.agent_timeout_seconds:g} segundos"
+            )
+            LOGGER.warning("%s", message)
             self.conversation_log.event(
                 "OPENCLAW_TIMEOUT",
-                str(exc),
+                message,
                 turno=self._turn_number,
                 duracion_ms=self._elapsed_ms(tool_started_at),
             )
             with suppress(Exception):
                 self._allow_consult_result_output()
-                await self._submit_tool_result(session_id, call_id, {"error": str(exc)})
+                await self._submit_tool_result(session_id, call_id, {"error": message})
         except GatewayError as exc:
             message = str(exc)
             if not self.session_id or "aborted" in message.lower():
@@ -604,7 +670,10 @@ class TipiVoiceApp:
             await self._submit_tool_result(
                 session_id,
                 call_id,
-                {"status": "accepted", "message": "La indicación se añadió a la consulta activa."},
+                {
+                    "status": "accepted",
+                    "message": "La indicación se añadió a la consulta activa.",
+                },
                 options={"suppressResponse": True},
             )
         except Exception as exc:
@@ -653,8 +722,8 @@ class TipiVoiceApp:
         )
         self._barge_in_cancelled = True
         self._turn_interrupted = True
+        self._suppress_output_until_user = True
         self.audio.clear_output()
-        await self._cancel_tool_tasks()
         await self._cancel_output(reason="wake-word")
         await asyncio.sleep(0.05)
         self.audio.clear_output()
@@ -690,15 +759,27 @@ class TipiVoiceApp:
             await asyncio.sleep(0.25)
             if not self.session_id or not self.audio:
                 continue
+            if self._audio_sender_task and self._audio_sender_task.done():
+                sender_error = self._audio_sender_task.exception()
+                if sender_error:
+                    raise GatewayError(f"Falló el envío de audio: {sender_error}")
             if self.audio.output_error:
                 raise self.audio.output_error
             if self.audio.is_playing.is_set() or self.pending_tools:
                 continue
-            if time.monotonic() - self.last_activity >= self.settings.idle_timeout_seconds:
-                LOGGER.info("Conversación cerrada tras %.1f s de silencio", self.settings.idle_timeout_seconds)
+            if (
+                time.monotonic() - self.last_activity
+                >= self.settings.idle_timeout_seconds
+            ):
+                LOGGER.info(
+                    "Conversación cerrada tras %.1f s de silencio",
+                    self.settings.idle_timeout_seconds,
+                )
                 await self._close_session(notify_gateway=True, reason="silencio")
 
-    async def _close_session(self, notify_gateway: bool, reason: str = "solicitado") -> None:
+    async def _close_session(
+        self, notify_gateway: bool, reason: str = "solicitado"
+    ) -> None:
         if self._closing_session:
             return
         self._closing_session = True
@@ -714,6 +795,9 @@ class TipiVoiceApp:
             await self._cancel_tool_tasks()
             if self.audio:
                 self.audio.clear_output()
+            if self.wake:
+                self.wake.reset()
+            self._drain_microphone_queue()
             if notify_gateway and session_id and self.gateway:
                 with suppress(Exception):
                     await self.gateway.request(
@@ -731,7 +815,10 @@ class TipiVoiceApp:
                         else None
                     ),
                 )
-                LOGGER.info('Tipi vuelve a estar atento a la palabra "%s"', self.settings.wake_words[0])
+                LOGGER.info(
+                    'Tipi vuelve a estar atento a la palabra "%s"',
+                    self.settings.wake_words[0],
+                )
             self._session_started_at = None
             self._wake_detected_at = None
             self._speech_started_at = None
@@ -745,6 +832,7 @@ class TipiVoiceApp:
             self._consult_wait_message_finished = False
             self._consult_result_ready = False
             self._consult_wait_output_cancelled = False
+            self._suppress_output_until_user = False
             self._turn_number = 0
         finally:
             self._closing_session = False
@@ -759,7 +847,26 @@ class TipiVoiceApp:
         if not path:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch()
+        payload = {
+            "timestamp": time.time(),
+            "version": __version__,
+            "gatewayConnected": bool(
+                self.gateway and not self.gateway.disconnected.is_set()
+            ),
+            "sessionActive": self.session_id is not None,
+            "pendingTools": len(self.pending_tools),
+            "inputDevice": self.audio.input_device_name if self.audio else None,
+            "outputDevice": self.audio.output_device_name if self.audio else None,
+            "microphoneLevel": self.audio_levels.microphone_level,
+            "outputLevel": self.audio_levels.output_level,
+            "speakerVoice": self.voice_preferences.voice,
+        }
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
 
     def _mark_activity(self) -> None:
         self.last_activity = time.monotonic()
@@ -796,11 +903,19 @@ class TipiVoiceApp:
         self._speech_started_at = None
         self._realtime_rate_state = None
         self._realtime_buffer.clear()
+        self._drain_microphone_queue()
         if self._audio_sender_queue is None:
             return
         while True:
             try:
                 self._audio_sender_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+    def _drain_microphone_queue(self) -> None:
+        while True:
+            try:
+                self.mic_queue.get_nowait()
             except asyncio.QueueEmpty:
                 return
 
@@ -811,8 +926,6 @@ class TipiVoiceApp:
         )
         self._speech_started_at = None
         self._realtime_buffer.clear()
-        if self.wake:
-            self.wake.reset()
 
     def _apply_spoken_audio_adjustment(self, text: str) -> None:
         if not self.audio:
@@ -822,7 +935,9 @@ class TipiVoiceApp:
         if adjustment is None:
             return
         self.audio_levels.apply(adjustment)
-        hardware_control = self._set_active_audio_level(adjustment.target, adjustment.level)
+        hardware_control = self._set_active_audio_level(
+            adjustment.target, adjustment.level
+        )
         if adjustment.target == "microfono":
             label = "sensibilidad del micrófono"
         else:
@@ -846,7 +961,9 @@ class TipiVoiceApp:
     def _set_active_audio_level(self, target: str, level: int) -> bool:
         if not self.audio:
             return False
-        hardware_control = bool(self.system_audio and self.system_audio.set_level(target, level))
+        hardware_control = bool(
+            self.system_audio and self.system_audio.set_level(target, level)
+        )
         if target == "microfono":
             digital_level = max(100, level) if hardware_control else level
             self.audio.set_input_level(digital_level)

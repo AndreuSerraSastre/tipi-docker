@@ -6,11 +6,15 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+User=__TIPI_USER__
+Group=__TIPI_GROUP__
 WorkingDirectory=__TIPI_DIR__
 ExecStart=__TIPI_DIR__/scripts/update-and-start.sh
 ExecStop=__TIPI_DIR__/scripts/stop.sh
 RemainAfterExit=yes
-TimeoutStartSec=600
+Restart=on-failure
+RestartSec=30
+TimeoutStartSec=900
 TimeoutStopSec=90
 
 [Install]

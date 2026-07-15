@@ -1,80 +1,34 @@
 # Tipi
 
-Instalación reproducible de OpenClaw para PC y Raspberry Pi con conversación por voz. Tipi escucha la palabra de activación localmente y solo abre una sesión de OpenAI Realtime cuando oye “Tipi” o una variante configurada.
+Instalación reproducible de OpenClaw para PC y Raspberry Pi con conversación por voz. Tipi escucha localmente y solo abre OpenAI Realtime cuando detecta «Tipi» o una variante configurada.
 
-## Qué incluye
+## Componentes
 
-- OpenClaw con `openai/gpt-5.6-sol`, razonamiento `medium` y acceso mediante código de dispositivo.
-- Codex actualizado dentro de la imagen `tipi-openclaw` para poder ejecutar GPT-5.6 Sol.
-- OpenClaw Talk con `gpt-realtime-2.1`, voz `cedar` y razonamiento `medium`.
-- Realtime responde directamente a saludos y conversación sencilla; consulta OpenClaw cuando necesita identidad ampliada, memoria, archivos, estado real, herramientas, acciones o verificaciones.
-- Las respuestas de voz tienden a una o dos frases, pero pueden ampliarse sin límite fijo cuando la persona lo pide o la explicación lo requiere. El puente bloquea una segunda respuesta de Realtime si no ha habido una nueva intervención.
-- Transcripción guiada para español de España y catalán, con reducción de ruido configurable para micrófonos cercanos o de sala.
-- Personalidad en `workspace/IDENTITY.md` y `workspace/SOUL.md`, sin instrucciones sobre una tarea concreta.
-- Activación offline mediante Vosk: `tipi`, `tipy`, `tip`, `tippi` y `tippy`.
-- Sonido ascendente al terminar el arranque y un pitido corto distinto al detectar la activación.
-- Si se dice “Tipi” mientras está respondiendo, corta la voz y vuelve a escuchar tras el pitido.
-- Si se dice “cállate”, “para”, “silencio”, “prou” o una variante inequívoca, cierra la conversación y no vuelve a escuchar hasta oír “Tipi”.
-- Volumen de salida y sensibilidad del micrófono ajustables hablando, con valores persistentes.
-- Cierre de Realtime después de cinco segundos sin actividad.
-- Actualización al arrancar con comprobación de salud y recuperación de la imagen anterior si falla.
-- Sincronización de los ajustes administrados de OpenClaw al actualizar, conservando autenticación y datos locales.
-- Modo cuidador de OpenClaw: revisa, diagnostica, repara, prueba, revierte y aprende tanto al arrancar como periódicamente.
+- OpenClaw con `openai/gpt-5.6-luna`, razonamiento `low` y autenticación de OpenAI por código de dispositivo.
+- OpenClaw Talk con `gpt-realtime-2.1`, voz `cedar`, razonamiento `low`, reducción de ruido y transcripción guiada para español y catalán.
+- Puente de voz Python 3.12 para Linux/ARM64, Linux/AMD64 y Windows.
+- Activación offline mediante Vosk. Durante la reproducción combina una transcripción abierta con un segundo reconocedor sensible y exige consenso para recuperar la palabra bajo voz solapada sin confundir «tipo», «típico», «sí» o «para ti».
+- Consulta híbrida: Realtime resuelve conversación sencilla y delega en OpenClaw cuando necesita memoria, archivos, información actual, herramientas, acciones o verificación.
+- Interrupción local: decir «Tipi» durante una respuesta detiene inmediatamente el audio atrasado y abre un nuevo turno. La consulta activa se conserva para poder corregirla o ampliarla.
+- Cierre local con «cállate», «para», «silencio», «prou» y variantes inequívocas.
+- Control hablado y persistente del volumen y de la sensibilidad del micrófono. En Linux se usan controles ALSA separados para no activar retorno del micrófono.
+- Cambio hablado y persistente de voz: por ejemplo, «pon Marin» la prepara para la siguiente conversación sin editar archivos ni reiniciar el robot.
+- Registro legible y JSONL de conversaciones, tool calls, latencias, interrupciones y errores, con redacción de credenciales reconocibles.
+- Servicio `systemd`, actualización de imágenes, healthchecks y recuperación automática de la versión anterior.
+- Modo cuidador de OpenClaw con identidad, memoria y revisiones de arranque y heartbeat.
 
-## Primera instalación
+## Credenciales
 
-El instalador actúa como asistente y no deja Tipi operativo hasta completar, en orden:
+Se utilizan dos mecanismos independientes:
 
-1. API key para OpenAI Realtime, oculta mientras se escribe y guardada solo en el `.env` local;
-2. autorización de la cuenta de OpenAI mediante URL y código de dispositivo;
-3. micrófono y altavoces;
-4. comprobación final del modelo, la memoria y los servicios.
+1. La autorización por código permite a OpenClaw usar GPT-5.6 Luna.
+2. `OPENAI_REALTIME_API_KEY` se usa exclusivamente para Talk Realtime.
 
-La imagen debe descargarse antes del segundo paso porque OpenClaw genera el código desde dentro del contenedor, pero la voz no se inicia ni consume Realtime hasta que termina el asistente.
+La autorización, la API key, el token del gateway, la memoria y los logs permanecen en `.env` y `data/`. Esas rutas están excluidas de Git y no se incorporan a las imágenes.
 
-El acceso por código se utiliza para GPT-5.6 Sol. La API key queda aislada como `OPENAI_REALTIME_API_KEY` y solo la consume Talk Realtime. Ambos datos se guardan en `data/` y `.env`, que están excluidos de Git y de las imágenes.
+## Raspberry Pi
 
-El instalador intenta descargar las imágenes publicadas. Si el registro no está disponible o requiere permisos, construye automáticamente las imágenes locales desde la base oficial y continúa la instalación. En los arranques posteriores también comprueba y aplica las actualizaciones de esa base.
-
-Después de autenticar el modelo, el instalador inicia el ritual oficial de primera ejecución de OpenClaw. El agente pregunta quién es, quién es Andreu y para qué fue creado; el instalador responde automáticamente con `config/tipi-bootstrap-answers.md`. Es el propio agente quien genera su identidad, perfil de usuario y memoria dentro de `data/openclaw/workspace/`, y el instalador verifica el resultado antes de arrancar la voz.
-
-A continuación, el propio OpenClaw crea sus órdenes permanentes de autocuidado en `AGENTS.md`, `BOOT.md` y `HEARTBEAT.md` y ejecuta una primera revisión real. Sus intervenciones quedan en `data/maintenance/actions.jsonl`; los aciertos, errores, correcciones, pruebas y reglas aprendidas se conservan en `CARETAKER_LESSONS.md` para que no repita fallos ni reescriba la historia como si siempre hubiera acertado. En esta instalación Andreu le concede acceso administrativo completo al dispositivo: puede modificar el sistema, Docker, el proyecto y sus servicios sin confirmaciones. No se debe desplegar esta configuración en un equipo que contenga datos o servicios que no se quiera poner bajo el control de Tipi.
-
-### Windows 11
-
-Requiere Docker Desktop y Python 3.12:
-
-```powershell
-.\scripts\setup-windows.ps1
-.\scripts\start-windows.ps1
-```
-
-En Windows, OpenClaw se ejecuta en Docker y el pequeño puente de audio se ejecuta en el host para acceder de forma fiable a los cascos.
-El instalador inicia además un puente local oculto que permite al modo cuidador administrar Windows. Solo acepta peticiones desde la carpeta privada del proyecto y no expone ningún puerto de red.
-
-### Logs de conversación
-
-Tipi crea un registro diario legible en `data/logs/`. Incluye la transcripción final de la persona, la respuesta de Realtime, las consultas y resultados de OpenClaw y los tiempos en milisegundos. También genera un archivo `.jsonl` equivalente para análisis automático. Las credenciales reconocibles se ocultan antes de escribir.
-
-Abrir el último registro en el Bloc de notas:
-
-```powershell
-.\scripts\show-logs-windows.ps1
-```
-
-Seguirlo en directo:
-
-```powershell
-.\scripts\show-logs-windows.ps1 -Follow
-```
-
-### Controles de audio hablados
-
-Durante una conversación se pueden usar órdenes como “sube el volumen”, “pon los auriculares al 60 %”, “baja la sensibilidad del micrófono” o “pon el micro al 150 %”. Los cambios se aplican al audio de Tipi, funcionan igual en Windows y Raspberry Pi y se conservan después de reiniciar. El micrófono se limita entre 25 % y 300 % para que una orden no lo deje inutilizable; la salida se limita entre 0 % y 100 %.
-
-### Raspberry Pi
-
-Recomendado: Raspberry Pi 4 o 5, Raspberry Pi OS de 64 bits, Docker Engine con Compose v2 y audio visible en `/dev/snd`.
+Recomendado: Raspberry Pi 4 o 5, sistema de 64 bits, Docker Engine con Compose v2 y audio visible en `/dev/snd`.
 
 ```bash
 git clone https://github.com/AndreuSerraSastre/tipi-docker.git
@@ -83,39 +37,93 @@ chmod +x scripts/*.sh
 ./scripts/install.sh
 ```
 
-El instalador activa `tipi.service`. En cada arranque busca imágenes nuevas, espera a que estén sanas y recupera las anteriores si una actualización falla.
+El asistente:
 
-Diagnóstico:
+1. valida Docker, arquitectura y audio;
+2. solicita la API key sin mostrarla;
+3. presenta la URL y el código de autorización de OpenAI;
+4. descarga Vosk y selecciona automáticamente un USB inequívoco, o pregunta si hay varios candidatos;
+5. configura Luna con razonamiento bajo, identidad, memoria y autocuidado;
+6. aprueba el cliente de voz, arranca los contenedores y habilita `tipi.service`;
+7. no termina hasta verificar contenedores, autenticación, modelo, Talk y dispositivos.
+
+Las imágenes públicas se descargan primero. Si no están disponibles, el asistente construye una copia local desde los Dockerfiles del repositorio.
+
+### Operación
 
 ```bash
 ./scripts/doctor.sh
-journalctl -u tipi.service -f
-docker compose -f compose.yaml -f compose.registry.yaml --profile linux-audio logs -f
+./scripts/smoke-agent.sh
 ./scripts/show-logs.sh
+docker compose --profile linux-audio logs -f --tail=100 tipi-voice
+journalctl -u tipi.service -f
 ```
 
-## Publicación
+`doctor.sh` es no destructivo: no recrea servicios ni ejecuta el asistente interno de OpenClaw. Comprueba salud, configuración efectiva, Luna autenticado, Talk, audio y autoinicio.
 
-`.github/workflows/publish.yml` prueba el proyecto y publica dos imágenes para `linux/amd64` y `linux/arm64`:
+Desde otro PC:
+
+```bash
+ssh USUARIO@IP_DE_LA_RASPBERRY
+cd /ruta/a/tipi-docker
+docker compose --profile linux-audio logs -f --tail=100 tipi-voice
+```
+
+### Actualizar una instalación existente
+
+```bash
+cd /ruta/a/tipi-docker
+git pull --ff-only
+./scripts/update-and-start.sh
+```
+
+Las correcciones del runtime de voz y del gateway se publican en Docker. Los cambios de Compose, instalación, diagnóstico y configuración viven en Git; por eso un robot existente debe actualizar ambas capas. Los datos locales se conservan.
+
+## Windows 11
+
+Requiere Docker Desktop y Python 3.12:
+
+```powershell
+.\scripts\setup-windows.ps1
+.\scripts\start-windows.ps1
+```
+
+OpenClaw se ejecuta en Docker y el puente de voz en Windows para acceder de forma fiable al audio. El modo cuidador utiliza un puente local sin puertos de red y limitado a la carpeta privada del proyecto.
+
+Logs:
+
+```powershell
+.\scripts\show-logs-windows.ps1
+.\scripts\show-logs-windows.ps1 -Follow
+```
+
+## Ajustes principales
+
+- `TIPI_OPENCLAW_MODEL=openai/gpt-5.6-luna`: agente consultado por Talk.
+- `TIPI_OPENCLAW_THINKING=low`: razonamiento del agente y de las consultas.
+- `TIPI_REALTIME_REASONING=low`: razonamiento de Realtime.
+- `TIPI_REALTIME_SPEAKER_VOICE=cedar`: voz inicial. También existen `marin`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer` y `verse`; `marin` y `cedar` suelen dar mejor calidad. Una preferencia elegida hablando se guarda en `data/voice/speaker-voice.json` y prevalece en sesiones posteriores.
+- `TIPI_WAKE_WORDS=tipi,tipy,tip,tippi,tippy`: variantes exactas de activación.
+- `TIPI_IDLE_TIMEOUT_SECONDS=5`: silencio antes de cerrar una conversación.
+- `TIPI_AGENT_TIMEOUT_SECONDS=75`: límite de una consulta hablada a OpenClaw.
+- `TIPI_BARGE_IN=false`: modo semidúplex recomendado con altavoces; «Tipi» siempre puede interrumpir.
+- `TIPI_OUTPUT_ECHO_GUARD_SECONDS=0.45`: cola residual descartada después de reproducir audio.
+- `TIPI_VAD_MODE=0..3`: sensibilidad de actividad de voz; `3` es la más estricta.
+- `TIPI_REALTIME_NOISE_REDUCTION=near_field|far_field|off`: `far_field` es apropiado para el micrófono de sala del robot.
+- `TIPI_REALTIME_TRANSCRIPTION_LANGUAGE=es`: idioma principal del transcriptor.
+- `TIPI_INPUT_DEVICE` y `TIPI_OUTPUT_DEVICE`: índice o parte estable del nombre. Es preferible `USB Audio Device` a un índice ALSA que pueda cambiar al reiniciar.
+
+Durante una conversación se pueden decir «sube el volumen», «pon los altavoces al 60 %», «sube la sensibilidad del micrófono» o «pon la voz Marin». La salida se limita a 0-100 % y la sensibilidad a 25-300 %.
+
+## Publicación y pruebas
+
+GitHub Actions ejecuta pruebas Python, validación de Compose/JSON/Node, `shellcheck` y construcción multi-arquitectura con SBOM y procedencia:
 
 - `ghcr.io/andreuserrasastre/tipi-openclaw:latest`
 - `ghcr.io/andreuserrasastre/tipi-voice:latest`
 
-El workflow se ejecuta al cambiar el proyecto y una vez al día. La Raspberry solo necesita descargar el repositorio, ejecutar el instalador y completar sus propios datos; nunca se publica ninguna credencial.
+El workflow se ejecuta en cada cambio de `main`, al crear una etiqueta y diariamente para incorporar una base OpenClaw actualizada. Una publicación solo continúa si todas las verificaciones pasan.
 
-El repositorio público es <https://github.com/AndreuSerraSastre/tipi-docker>. La publicación pública contiene únicamente código, configuración base e imágenes; `.env`, claves, autenticación, memoria, sesiones y registros permanecen locales en cada instalación.
+El repositorio público es <https://github.com/AndreuSerraSastre/tipi-docker>. Nunca deben incorporarse `.env`, `data/`, copias de seguridad, claves, sesiones ni logs.
 
-## Ajustes
-
-- `TIPI_IDLE_TIMEOUT_SECONDS=5`: tiempo sin actividad antes de cerrar Realtime.
-- `TIPI_WAKE_WORDS=tipi,tipy,tip,tippi,tippy`: variantes de activación.
-- `TIPI_BARGE_IN=false`: semidúplex recomendado con altavoces para evitar eco.
-- `TIPI_OUTPUT_ECHO_GUARD_SECONDS=1.2`: descarta el eco residual del altavoz al terminar cada respuesta.
-- `TIPI_VAD_MODE=0..3`: sensibilidad local; `3` es la más estricta.
-- `TIPI_REALTIME_SPEAKER_VOICE=cedar`: voz de OpenAI Realtime. Opciones habituales: `marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer` y `verse`; `marin` y `cedar` son las recomendadas. El cambio se aplica en una nueva sesión.
-- `TIPI_REALTIME_NOISE_REDUCTION=near_field|far_field|off`: `near_field` para cascos y `far_field` para el micrófono de sala del robot.
-- `TIPI_REALTIME_TRANSCRIPTION_LANGUAGE=es`: idioma principal enviado al transcriptor; el contexto permite contestar también en catalán.
-- `TIPI_REALTIME_TRANSCRIPTION_PROMPT=...`: vocabulario y contexto que ayudan a evitar transcripciones en idiomas aleatorios.
-- `TIPI_OUTPUT_CHANNELS=1|2`: salida mono o estéreo; en PC se recomienda `2` para evitar audio deformado en dispositivos estéreo.
-
-Documentación relacionada: [Docker en OpenClaw](https://docs.openclaw.ai/install/docker), [OpenAI en OpenClaw](https://docs.openclaw.ai/providers/openai) y [OpenClaw en Raspberry Pi](https://docs.openclaw.ai/install/raspberry-pi).
+La configuración concede a OpenClaw control administrativo del dispositivo dedicado. No debe instalarse sin revisar ese alcance en un equipo con datos o servicios ajenos a Tipi.

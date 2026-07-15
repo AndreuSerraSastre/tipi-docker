@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import platform
@@ -13,6 +14,7 @@ from typing import Any
 
 import websockets
 
+from . import __version__
 from .identity import DeviceIdentity, build_auth_payload
 
 LOGGER = logging.getLogger(__name__)
@@ -32,6 +34,10 @@ class GatewayClient:
         self.ws: Any = None
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._event_handlers: dict[str, list[EventHandler]] = {}
+        self._event_queue: asyncio.Queue[
+            tuple[str, dict[str, Any], tuple[EventHandler, ...]]
+        ] = asyncio.Queue(maxsize=2048)
+        self._event_task: asyncio.Task[None] | None = None
         self._recv_task: asyncio.Task[None] | None = None
         self._challenge: asyncio.Future[str] | None = None
         self._chat_waiters: dict[str, asyncio.Future[str]] = {}
@@ -49,12 +55,17 @@ class GatewayClient:
         )
         loop = asyncio.get_running_loop()
         self._challenge = loop.create_future()
+        self._event_task = asyncio.create_task(
+            self._event_dispatch_loop(), name="gateway-events"
+        )
         self._recv_task = asyncio.create_task(self._recv_loop(), name="gateway-recv")
         try:
             nonce = await asyncio.wait_for(self._challenge, timeout=10)
             params = self._connect_params(nonce)
             hello = await self.request("connect", params, timeout=15)
-            LOGGER.info("Conectado a OpenClaw Gateway (protocolo v%s)", PROTOCOL_VERSION)
+            LOGGER.info(
+                "Conectado a OpenClaw Gateway (protocolo v%s)", PROTOCOL_VERSION
+            )
             return hello
         except Exception:
             await self.close()
@@ -66,7 +77,9 @@ class GatewayClient:
         role = "operator"
         scopes = ["operator.read", "operator.write", "operator.admin"]
         signed_at_ms = int(time.time() * 1000)
-        current_platform = "win32" if sys.platform == "win32" else platform.system().lower()
+        current_platform = (
+            "win32" if sys.platform == "win32" else platform.system().lower()
+        )
         payload = build_auth_payload(
             identity=self.identity,
             client_id=client_id,
@@ -84,7 +97,7 @@ class GatewayClient:
             "client": {
                 "id": client_id,
                 "displayName": "Tipi Voice",
-                "version": "0.1.0",
+                "version": __version__,
                 "platform": current_platform,
                 "mode": client_mode,
             },
@@ -101,7 +114,9 @@ class GatewayClient:
             },
         }
 
-    async def request(self, method: str, params: Any = None, timeout: float = 30) -> Any:
+    async def request(
+        self, method: str, params: Any = None, timeout: float = 30
+    ) -> Any:
         if self.ws is None:
             raise GatewayError("Gateway no conectado")
         request_id = str(uuid.uuid4())
@@ -110,8 +125,8 @@ class GatewayClient:
             frame["params"] = params
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
-        await self.ws.send(json.dumps(frame, ensure_ascii=False))
         try:
+            await self.ws.send(json.dumps(frame, ensure_ascii=False))
             return await asyncio.wait_for(future, timeout=timeout)
         finally:
             self._pending.pop(request_id, None)
@@ -139,13 +154,17 @@ class GatewayClient:
                 if message.get("type") == "res":
                     self._handle_response(message)
                 elif message.get("type") == "event":
-                    await self._handle_event(message)
+                    self._handle_event(message)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             LOGGER.warning("Conexión con Gateway terminada: %s", exc)
             self._fail_pending(GatewayError(f"Conexión con Gateway terminada: {exc}"))
         finally:
+            error = GatewayError("Conexión con Gateway terminada")
+            self._fail_pending(error)
+            if self._challenge and not self._challenge.done():
+                self._challenge.set_exception(error)
             self.disconnected.set()
 
     def _handle_response(self, message: dict[str, Any]) -> None:
@@ -156,25 +175,48 @@ class GatewayClient:
             future.set_result(message.get("payload"))
             return
         error = message.get("error") or {}
-        future.set_exception(GatewayError(error.get("message", "Error desconocido del Gateway")))
+        future.set_exception(
+            GatewayError(error.get("message", "Error desconocido del Gateway"))
+        )
 
-    async def _handle_event(self, message: dict[str, Any]) -> None:
+    def _handle_event(self, message: dict[str, Any]) -> None:
         event = message.get("event", "")
         payload = message.get("payload") or {}
-        if event == "connect.challenge" and self._challenge and not self._challenge.done():
+        if (
+            event == "connect.challenge"
+            and self._challenge
+            and not self._challenge.done()
+        ):
             nonce = payload.get("nonce")
             if isinstance(nonce, str) and nonce.strip():
                 self._challenge.set_result(nonce.strip())
             return
         if event == "chat":
             self._handle_chat_event(payload)
-        for handler in list(self._event_handlers.get(event, [])):
+        handlers = tuple(self._event_handlers.get(event, ()))
+        if not handlers:
+            return
+        try:
+            self._event_queue.put_nowait((event, payload, handlers))
+        except asyncio.QueueFull as exc:
+            raise GatewayError("La cola de eventos del Gateway se ha saturado") from exc
+
+    async def _event_dispatch_loop(self) -> None:
+        """Preserva el orden de eventos sin bloquear el receptor de respuestas."""
+        while True:
+            event, payload, handlers = await self._event_queue.get()
             try:
-                result = handler(payload)
-                if asyncio.iscoroutine(result):
-                    asyncio.create_task(result)
-            except Exception:
-                LOGGER.exception("Error en manejador de evento %s", event)
+                for handler in handlers:
+                    try:
+                        result = handler(payload)
+                        if inspect.isawaitable(result):
+                            await result
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        LOGGER.exception("Error en manejador de evento %s", event)
+            finally:
+                self._event_queue.task_done()
 
     def _handle_chat_event(self, payload: dict[str, Any]) -> None:
         run_id = payload.get("runId")
@@ -184,13 +226,17 @@ class GatewayClient:
         if state == "final":
             content = (payload.get("message") or {}).get("content") or []
             result: str | Exception = "\n".join(
-                part.get("text", "") for part in content if isinstance(part, dict) and part.get("text")
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("text")
             )
         else:
             result = GatewayError(payload.get("errorMessage") or f"Ejecución {state}")
         waiter = self._chat_waiters.get(run_id)
         if waiter is not None and not waiter.done():
-            waiter.set_exception(result) if isinstance(result, Exception) else waiter.set_result(result)
+            waiter.set_exception(result) if isinstance(
+                result, Exception
+            ) else waiter.set_result(result)
             return
         self._chat_results[run_id] = result
         while len(self._chat_results) > 32:
@@ -205,11 +251,22 @@ class GatewayClient:
         if self._recv_task:
             self._recv_task.cancel()
         if self.ws:
-            await self.ws.close()
+            try:
+                await self.ws.close()
+            except Exception as exc:
+                LOGGER.debug("Error al cerrar el WebSocket del Gateway: %s", exc)
         if self._recv_task:
             try:
                 await self._recv_task
             except asyncio.CancelledError:
                 pass
+        if self._event_task:
+            self._event_task.cancel()
+            try:
+                await self._event_task
+            except asyncio.CancelledError:
+                pass
+        self._fail_pending(GatewayError("Conexión con Gateway cerrada"))
         self.ws = None
         self._recv_task = None
+        self._event_task = None

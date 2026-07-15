@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import audioop
+import json
 import logging
 import queue
 import threading
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 import numpy as np
@@ -37,6 +39,23 @@ def list_devices() -> str:
     return "\n".join(lines)
 
 
+def list_devices_json() -> str:
+    devices = []
+    for index, device in enumerate(sd.query_devices()):
+        if not device["max_input_channels"] and not device["max_output_channels"]:
+            continue
+        devices.append(
+            {
+                "index": index,
+                "name": str(device["name"]),
+                "inputChannels": int(device["max_input_channels"]),
+                "outputChannels": int(device["max_output_channels"]),
+                "defaultSampleRate": int(device["default_samplerate"]),
+            }
+        )
+    return json.dumps({"devices": devices}, ensure_ascii=False)
+
+
 def resolve_device(selector: str | int | None, kind: str) -> int | None:
     if selector is None:
         return None
@@ -47,7 +66,14 @@ def resolve_device(selector: str | int | None, kind: str) -> int | None:
         selected = selector
     else:
         needle = selector.casefold()
-        matches = [index for index, item in enumerate(devices) if needle in item["name"].casefold()]
+        channel_key = (
+            "max_input_channels" if kind == "entrada" else "max_output_channels"
+        )
+        matches = [
+            index
+            for index, item in enumerate(devices)
+            if needle in item["name"].casefold() and item[channel_key] >= 1
+        ]
         if not matches:
             raise ValueError(f"No se encontró el dispositivo de {kind}: {selector}")
         selected = matches[0]
@@ -88,7 +114,10 @@ class AudioEngine:
         self._capture_buffer = bytearray()
         self._output_rate_state: Any = None
         self.realtime_output_rate = REALTIME_OUTPUT_RATE
-        self._output_queue: queue.Queue[bytes | object] = queue.Queue(maxsize=256)
+        # Realtime streams at roughly playback speed. Keeping this queue
+        # unbounded guarantees that control markers cannot be lost between the
+        # last PCM chunk and audioDone; device failures are surfaced separately.
+        self._output_queue: queue.Queue[bytes | object] = queue.Queue()
         self._output_thread: threading.Thread | None = None
         self._stopping = threading.Event()
         self.is_playing = threading.Event()
@@ -111,12 +140,17 @@ class AudioEngine:
     def _open_input(self) -> None:
         try:
             sd.check_input_settings(
-                device=self.input_device, channels=1, dtype="int16", samplerate=self.input_rate
+                device=self.input_device,
+                channels=1,
+                dtype="int16",
+                samplerate=self.input_rate,
             )
         except sd.PortAudioError:
             info = sd.query_devices(self.input_device, "input")
             fallback = int(info["default_samplerate"])
-            LOGGER.warning("La entrada no admite %s Hz; se usará %s Hz", self.input_rate, fallback)
+            LOGGER.warning(
+                "La entrada no admite %s Hz; se usará %s Hz", self.input_rate, fallback
+            )
             self.input_rate = fallback
         blocksize = max(1, round(self.input_rate * FRAME_MS / 1000))
         self.input_stream = sd.RawInputStream(
@@ -139,7 +173,9 @@ class AudioEngine:
         except sd.PortAudioError:
             info = sd.query_devices(self.output_device, "output")
             fallback = int(info["default_samplerate"])
-            LOGGER.warning("La salida no admite %s Hz; se usará %s Hz", self.output_rate, fallback)
+            LOGGER.warning(
+                "La salida no admite %s Hz; se usará %s Hz", self.output_rate, fallback
+            )
             self.output_rate = fallback
         self.output_stream = sd.RawOutputStream(
             device=self.output_device,
@@ -149,7 +185,9 @@ class AudioEngine:
         )
         self.output_stream.start()
 
-    def _input_callback(self, indata: Any, frames: int, time_info: Any, status: Any) -> None:
+    def _input_callback(
+        self, indata: Any, frames: int, time_info: Any, status: Any
+    ) -> None:
         if status:
             LOGGER.debug("Estado de entrada de audio: %s", status)
         pcm = bytes(indata)
@@ -173,7 +211,9 @@ class AudioEngine:
                 pass
         self.input_queue.put_nowait(frame)
 
-    def set_realtime_output_format(self, *, sample_rate: int, channels: int = 1) -> None:
+    def set_realtime_output_format(
+        self, *, sample_rate: int, channels: int = 1
+    ) -> None:
         """Adapta la reproducción al formato anunciado por OpenClaw Talk."""
         if sample_rate <= 0:
             raise ValueError("La frecuencia de salida Realtime no es válida")
@@ -210,7 +250,9 @@ class AudioEngine:
         def tone(frequency: float, duration: float) -> np.ndarray:
             sample_count = round(sample_rate * duration)
             times = np.arange(sample_count, dtype=np.float64) / sample_rate
-            envelope = np.sin(np.linspace(0, np.pi, sample_count, dtype=np.float64)) ** 2
+            envelope = (
+                np.sin(np.linspace(0, np.pi, sample_count, dtype=np.float64)) ** 2
+            )
             return np.sin(2 * np.pi * frequency * times) * envelope * 0.16
 
         silence = np.zeros(round(sample_rate * 0.06), dtype=np.float64)
@@ -287,7 +329,11 @@ class AudioEngine:
 
     def _device_name(self, device: int | None, kind: str) -> str:
         try:
-            return str(sd.query_devices(device, "input" if kind == "entrada" else "output")["name"])
+            return str(
+                sd.query_devices(device, "input" if kind == "entrada" else "output")[
+                    "name"
+                ]
+            )
         except Exception:
             return "predeterminado"
 
@@ -302,17 +348,24 @@ class AudioEngine:
     def stop(self) -> None:
         self.prepare_stop()
         if self.input_stream:
-            self.input_stream.stop()
-            self.input_stream.close()
-        try:
-            self._output_queue.put_nowait(_STOP)
-        except queue.Full:
-            pass
+            with suppress(Exception):
+                self.input_stream.stop()
+            with suppress(Exception):
+                self.input_stream.close()
+        while True:
+            try:
+                self._output_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._output_queue.put_nowait(_STOP)
         if self._output_thread:
             self._output_thread.join(timeout=2)
         if self.output_stream:
-            self.output_stream.stop()
-            self.output_stream.close()
+            with suppress(Exception):
+                self.output_stream.stop()
+            with suppress(Exception):
+                self.output_stream.close()
+        self.is_playing.clear()
 
     def set_input_level(self, level: int) -> None:
         self.input_level = max(25, min(300, level))

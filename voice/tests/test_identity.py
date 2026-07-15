@@ -35,4 +35,3 @@ def test_identity_is_stable_and_signs_openclaw_v3_payload(tmp_path: Path) -> Non
     Ed25519PublicKey.from_public_bytes(first.public_key_raw).verify(
         _decode(first.sign(payload)), payload.encode()
     )
-

@@ -1,8 +1,14 @@
 name: tipi
 
+x-tipi-logging: &tipi-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/andreuserrasastre/tipi-openclaw:latest}
     build:
       context: ./gateway
     user: root
@@ -31,6 +37,7 @@ services:
       - "127.0.0.1:18789:18789"
     init: true
     restart: unless-stopped
+    logging: *tipi-logging
     command:
       - sh
       - -c
@@ -47,7 +54,7 @@ services:
       start_period: 30s
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/andreuserrasastre/tipi-openclaw:latest}
     profiles: ["tools"]
     user: root
     privileged: true
@@ -74,23 +81,35 @@ services:
     depends_on:
       openclaw-gateway:
         condition: service_healthy
+    logging: *tipi-logging
 
   tipi-voice:
     profiles: ["linux-audio"]
-    image: ${TIPI_VOICE_IMAGE:-tipi-voice:local}
+    image: ${TIPI_VOICE_IMAGE:-ghcr.io/andreuserrasastre/tipi-voice:latest}
     build:
       context: ./voice
-    pull_policy: build
-    network_mode: service:openclaw-gateway
-    env_file:
-      - .env
     environment:
-      TIPI_GATEWAY_URL: ws://127.0.0.1:18789
+      TIPI_GATEWAY_URL: ws://openclaw-gateway:18789
       TIPI_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      TIPI_SESSION_KEY: ${TIPI_SESSION_KEY:-agent:main:tipi-voice}
+      TIPI_WAKE_WORDS: ${TIPI_WAKE_WORDS:-tipi,tipy,tip,tippi,tippy}
+      TIPI_IDLE_TIMEOUT_SECONDS: ${TIPI_IDLE_TIMEOUT_SECONDS:-5}
+      TIPI_AGENT_TIMEOUT_SECONDS: ${TIPI_AGENT_TIMEOUT_SECONDS:-75}
+      TIPI_INPUT_DEVICE: ${TIPI_INPUT_DEVICE:-}
+      TIPI_OUTPUT_DEVICE: ${TIPI_OUTPUT_DEVICE:-}
+      TIPI_INPUT_SAMPLE_RATE: ${TIPI_INPUT_SAMPLE_RATE:-48000}
+      TIPI_OUTPUT_SAMPLE_RATE: ${TIPI_OUTPUT_SAMPLE_RATE:-48000}
+      TIPI_OUTPUT_CHANNELS: ${TIPI_OUTPUT_CHANNELS:-2}
+      TIPI_VAD_MODE: ${TIPI_VAD_MODE:-3}
+      TIPI_BARGE_IN: ${TIPI_BARGE_IN:-false}
+      TIPI_OUTPUT_ECHO_GUARD_SECONDS: ${TIPI_OUTPUT_ECHO_GUARD_SECONDS:-0.45}
+      TIPI_REALTIME_SPEAKER_VOICE: ${TIPI_REALTIME_SPEAKER_VOICE:-cedar}
+      TIPI_LOG_LEVEL: ${TIPI_LOG_LEVEL:-INFO}
       TIPI_VOSK_MODEL: /models/vosk-model-small-es-0.42
       TIPI_STATE_DIR: /state
       TIPI_LOG_DIR: /state/logs
       TIPI_HEALTH_FILE: /state/tipi-voice.health
+      TZ: ${TZ:-Europe/Madrid}
     volumes:
       - ./data/models:/models:ro
       - ./data/voice:/state
@@ -100,10 +119,15 @@ services:
       - audio
     cap_drop:
       - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     security_opt:
       - no-new-privileges:true
     init: true
     restart: unless-stopped
+    stop_grace_period: 15s
+    logging: *tipi-logging
     depends_on:
       openclaw-gateway:
         condition: service_healthy

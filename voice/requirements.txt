@@ -1,8 +1,8 @@
-cryptography==45.0.5
-numpy==2.3.1
-python-dotenv==1.1.1
-sounddevice==0.5.2
+cryptography==49.0.0
+numpy==2.5.1
+python-dotenv==1.2.2
+sounddevice==0.5.5
 vosk==0.3.45
 webrtcvad-wheels==2.0.14
-websockets==15.0.1
+websockets==16.1
 pycaw==20251023; sys_platform == "win32"

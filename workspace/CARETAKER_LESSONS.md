@@ -26,6 +26,56 @@ Este archivo conserva el aprendizaje técnico del modo cuidador. No se borran lo
 - Regla reutilizable: en Windows, antes de terminar un supuesto proceso duplicado, comparar PID, ParentProcessId, hora de inicio, línea de comandos y ejecución raíz; una cadena del lanzador del entorno virtual cuenta como una sola instancia.
 - Estado: vigente.
 
+## 2026-07-15 — un diagnóstico recreó el gateway y aisló la voz
+
+- Fecha y desencadenante: ejecución de `scripts/doctor.sh` sobre una instalación que usaba imágenes locales.
+- Observación y evidencia: el script forzaba `compose.registry.yaml`, inició un CLI que no terminó y sustituyó el gateway. La voz compartía su namespace con el contenedor anterior mediante `network_mode: service:openclaw-gateway`, por lo que quedó reiniciándose aunque el gateway nuevo estaba sano.
+- Qué se hizo mal o se asumió sin pruebas: distintas rutas operativas elegían combinaciones de Compose diferentes y el diagnóstico ejecutaba un comando interno lento y mutable.
+- Impacto real o potencial: pérdida total de conversación después de una comprobación que debía ser de solo lectura.
+- Corrección aplicada: todos los scripts usan un único `compose.yaml`; la voz usa la red normal y resuelve `openclaw-gateway`; el diagnóstico inspecciona salud, configuración, modelo, autenticación y estado JSON sin recrear contenedores. El actualizador identifica las imágenes realmente activas y evita reintentar un par ya rechazado.
+- Prueba final: Compose validado, conexión real desde otro contenedor por DNS interno y emparejamiento exacto por `deviceId` completados sin afectar al servicio activo.
+- Regla reutilizable: diagnósticos de solo lectura no deben cambiar overlays, imágenes ni namespaces; la recuperación debe referirse al ID ejecutado, no a una etiqueta mutable.
+- Estado: vigente.
+
+## 2026-07-15 — la interrupción por «Tipi» era frágil durante la reproducción
+
+- Fecha y desencadenante: varias conversaciones en las que la persona repetía «Tipi» y la respuesta seguía reproduciéndose.
+- Observación y evidencia: el detector exigía dos hipótesis parciales, aunque un «Tipi» real puede aparecer una sola vez y mutar enseguida a «ti». Con habla solapada, el reconocedor abierto llegó a oír «tv», mientras una gramática limitada recuperó «tipi» pero también forzó falsos positivos con «sí», «tipo», «típico» y «para ti». Además, audio ya recibido podía volver a entrar en la cola después de cancelarla.
+- Corrección aplicada: una coincidencia exacta del reconocedor abierto interrumpe con el primer parcial. Bajo solapamiento se usa un segundo reconocedor sensible, pero requiere dos muestras y una pista fonética independiente y poco común del reconocedor abierto. El bloqueo durante playback baja a 450 ms y todo audio antiguo se suprime hasta la siguiente transcripción humana. Interrumpir ya no abandona una consulta activa, por lo que la nueva frase puede dirigirla.
+- Prueba final: 57 pruebas ARM64 y una prueba con Vosk real: «Tipi» limpio detectado a 1120 ms, mezclado con habla detectado a 2300 ms y frase de fondo sin activación. También se verificaron cooldown, descarte de audio atrasado, conservación de tool call y orden estricto de eventos del gateway.
+- Regla reutilizable: los parciales de ASR son acumulativos, no estables; una gramática pequeña nunca debe decidir sola y una cancelación local debe incluir una barrera contra datos que ya estaban en tránsito.
+- Estado: vigente.
+
+## 2026-07-15 — la consulta del agente bloqueaba su propio resultado
+
+- Fecha y desencadenante: consultas habladas que respondían «Un momento» y agotaban 120 segundos aunque OpenClaw ya estaba trabajando.
+- Observación y evidencia: el manejador de `talk.event` esperaba el resultado final del agente dentro del mismo bucle que recibía los eventos `chat`; mientras esperaba, el resultado que debía desbloquearlo no podía procesarse.
+- Impacto real o potencial: pausas de dos minutos, respuestas de espera repetidas, cierre por silencio y errores `TimeoutError` o `Ejecución aborted` al decir «cállate».
+- Corrección aplicada: el receptor WebSocket resuelve inmediatamente respuestas y resultados `chat`; los eventos Talk pasan a una cola ordenada independiente y cada consulta se ejecuta en su propia tarea. El timeout hablado es configurable y una cancelación esperada ya no genera un traceback de error.
+- Prueba final: una sesión Talk real con audio sintético produjo transcripción, tool call, ejecución de `date`, resultado de OpenClaw y una única respuesta final en 31,5 segundos. Una prueba unitaria mantiene ocupado el manejador Talk y confirma que el resultado `chat` sigue llegando.
+- Regla reutilizable: ningún manejador puede esperar un evento que solo el mismo bucle receptor es capaz de despachar; separar siempre recepción, correlación de respuestas y trabajo potencialmente lento.
+- Estado: vigente.
+
+## 2026-07-15 — Codex estaba instalado pero no era ejecutable por nombre
+
+- Fecha y desencadenante: inspección de la imagen ARM64 exacta antes de publicarla.
+- Observación y evidencia: `@openai/codex` 0.144.4 y su enlace existían en `/app/node_modules/.bin`, pero ese directorio no formaba parte de `PATH`; `codex --version` fallaba mientras OpenClaw, Docker y Compose sí respondían.
+- Impacto real o potencial: una herramienta o tarea de autocuidado que invoque `codex` por nombre habría fallado pese a que la construcción de la imagen terminaba correctamente.
+- Corrección aplicada: la imagen añade el directorio de binarios npm a `PATH` y durante cada build ejecuta Codex, Docker y Compose para comprobar que los tres son utilizables.
+- Prueba final: dentro de la imagen ARM64, `codex --version` devolvió 0.144.4, Docker 29.6.1, Compose 5.2.0 y OpenClaw 2026.7.1.
+- Regla reutilizable: comprobar el ejecutable desde el entorno final y con el usuario final; la presencia del paquete o de un enlace no demuestra que el comando esté accesible.
+- Estado: vigente.
+
+## 2026-07-15 — un control ALSA simple podía activar retorno de micrófono
+
+- Fecha y desencadenante: validación del nuevo control de volumen Linux antes de desplegarlo.
+- Observación y evidencia: el control simple `Mic` del USB contiene a la vez volumen de reproducción y captura; usar `sset Mic ... unmute` habría activado sidetone y posible realimentación.
+- Impacto real o potencial: no llegó a producción; podía causar eco fuerte y falsos despertares.
+- Corrección aplicada: se usan exclusivamente `Mic Capture Volume/Switch` y `Speaker Playback Volume/Switch` mediante `amixer cset`; si no existen, se conserva el control digital.
+- Prueba final: prueba real en el USB manteniendo `Mic Playback` al 52 % y apagado, captura al 57 % y altavoces al 100 % encendidos.
+- Regla reutilizable: no usar un control mixer agregado cuando el dispositivo expone direcciones separadas; comprobar siempre volumen y switch de playback y capture después del cambio.
+- Estado: vigente.
+
 ## 2026-07-13 — consulta obligatoria demasiado lenta para conversación social
 
 - Fecha y desencadenante: una prueba con un simple “Hola” tardó 6,7 segundos porque `force-agent-consult` envió incluso el saludo a GPT-5.6 Sol.

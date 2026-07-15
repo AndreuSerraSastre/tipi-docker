@@ -20,9 +20,13 @@ if ((Test-Path -LiteralPath $Attestation) -and $WorkspaceEntries.Count -eq 0) {
 }
 
 function Invoke-BootstrapTurn([string]$Message) {
+    $thinkingLine = [IO.File]::ReadAllLines((Join-Path $ProjectRoot '.env')) |
+        Where-Object { $_.StartsWith('TIPI_OPENCLAW_THINKING=') } |
+        Select-Object -First 1
+    $thinking = if ($thinkingLine) { $thinkingLine.Substring('TIPI_OPENCLAW_THINKING='.Length).Trim() } else { 'low' }
     docker compose --profile tools run --rm --no-deps openclaw-cli agent `
         --session-key 'agent:main:tipi-onboarding' `
-        --thinking medium `
+        --thinking $thinking `
         --timeout 300 `
         --message $Message
     if ($LASTEXITCODE -ne 0) { throw 'OpenClaw no pudo completar el diálogo inicial de Tipi.' }

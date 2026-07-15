@@ -6,7 +6,9 @@ import unicodedata
 
 def _normalize(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text.casefold())
-    without_accents = "".join(char for char in decomposed if not unicodedata.combining(char))
+    without_accents = "".join(
+        char for char in decomposed if not unicodedata.combining(char)
+    )
     return re.sub(r"[^a-z0-9]+", " ", without_accents).strip()
 
 

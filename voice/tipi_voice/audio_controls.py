@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 import sys
 import unicodedata
 from dataclasses import dataclass
@@ -80,7 +81,9 @@ def parse_audio_command(
     current = microphone_level if target == "microfono" else output_level
 
     increase = bool(
-        re.search(r"\b(sube|subir|aumenta|aumentar|incrementa|incrementar)\b", normalized)
+        re.search(
+            r"\b(sube|subir|aumenta|aumentar|incrementa|incrementar)\b", normalized
+        )
         or "mas alto" in normalized
         or "mas fuerte" in normalized
     )
@@ -90,7 +93,9 @@ def parse_audio_command(
         or "menos fuerte" in normalized
     )
     set_level = bool(
-        re.search(r"\b(pon|poner|ajusta|ajustar|fija|fijar|establece|deja)\b", normalized)
+        re.search(
+            r"\b(pon|poner|ajusta|ajustar|fija|fijar|establece|deja)\b", normalized
+        )
     )
     silence = bool(re.search(r"\b(silencia|silenciar|mutea|mutear|mudo)\b", normalized))
     maximum = bool(re.search(r"\b(maximo|maxima|tope)\b", normalized))
@@ -99,7 +104,9 @@ def parse_audio_command(
     absolute_number = number is not None and bool(
         re.search(r"\b(al|a|en)\s+(?:\d{1,3}|[a-z]+)", normalized)
     )
-    if not any((increase, decrease, set_level, silence, maximum, minimum, absolute_number)):
+    if not any(
+        (increase, decrease, set_level, silence, maximum, minimum, absolute_number)
+    ):
         return None
 
     lower, upper = (25, 300) if target == "microfono" else (0, 100)
@@ -167,13 +174,15 @@ class AudioLevelStore:
 
 
 class SystemAudioController:
-    """Controla los endpoints reales de Windows; en otros sistemas usa el respaldo digital."""
+    """Controla el nivel real del endpoint y usa ganancia digital como respaldo."""
 
     def __init__(self, input_device_name: str, output_device_name: str):
         self.input_device_name = input_device_name
         self.output_device_name = output_device_name
 
     def set_level(self, target: AudioTarget, level: int) -> bool:
+        if sys.platform.startswith("linux"):
+            return self._set_linux_level(target, level)
         if sys.platform != "win32":
             return False
         try:
@@ -181,9 +190,15 @@ class SystemAudioController:
             from pycaw.pycaw import AudioUtilities
 
             flow = EDataFlow.eCapture if target == "microfono" else EDataFlow.eRender
-            expected_name = self.input_device_name if target == "microfono" else self.output_device_name
+            expected_name = (
+                self.input_device_name
+                if target == "microfono"
+                else self.output_device_name
+            )
             expected = _normalize(expected_name)
-            devices = AudioUtilities.GetAllDevices(flow.value, DEVICE_STATE.ACTIVE.value)
+            devices = AudioUtilities.GetAllDevices(
+                flow.value, DEVICE_STATE.ACTIVE.value
+            )
             device = next(
                 (
                     candidate
@@ -194,14 +209,126 @@ class SystemAudioController:
                 None,
             )
             if device is None:
-                LOGGER.warning("No se encontró el endpoint de Windows para %s", expected_name)
+                LOGGER.warning(
+                    "No se encontró el endpoint de Windows para %s", expected_name
+                )
                 return False
             scalar = max(0.0, min(1.0, level / 100))
             device.EndpointVolume.SetMasterVolumeLevelScalar(scalar, None)
             device.EndpointVolume.SetMute(1 if level == 0 else 0, None)
             actual = round(device.EndpointVolume.GetMasterVolumeLevelScalar() * 100)
-            LOGGER.info("Nivel real de Windows ajustado: %s al %s%%", device.FriendlyName, actual)
+            LOGGER.info(
+                "Nivel real de Windows ajustado: %s al %s%%",
+                device.FriendlyName,
+                actual,
+            )
             return abs(actual - min(level, 100)) <= 1
         except Exception:
-            LOGGER.exception("No se pudo ajustar el nivel real del dispositivo; se usará control digital")
+            LOGGER.exception(
+                "No se pudo ajustar el nivel real del dispositivo; se usará control digital"
+            )
             return False
+
+    def _set_linux_level(self, target: AudioTarget, level: int) -> bool:
+        device_name = (
+            self.input_device_name if target == "microfono" else self.output_device_name
+        )
+        match = re.search(r"\(hw:(\d+)(?:,\d+)?\)", device_name, flags=re.IGNORECASE)
+        if match is None:
+            LOGGER.debug(
+                "El dispositivo ALSA no expone un número de tarjeta: %s", device_name
+            )
+            return False
+        card = match.group(1)
+        try:
+            listing = subprocess.run(
+                ["amixer", "-c", card, "controls"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except (OSError, subprocess.SubprocessError):
+            LOGGER.warning("No se pudo consultar ALSA; se usará control digital")
+            return False
+        if listing.returncode != 0:
+            return False
+        controls = re.findall(r"name='([^']+)'", listing.stdout)
+        volume_priorities = (
+            (
+                "Mic Capture Volume",
+                "Microphone Capture Volume",
+                "Capture Volume",
+                "Input Gain Capture Volume",
+            )
+            if target == "microfono"
+            else (
+                "Speaker Playback Volume",
+                "PCM Playback Volume",
+                "Master Playback Volume",
+                "Headphone Playback Volume",
+            )
+        )
+        normalized = {_normalize(control): control for control in controls}
+        volume_control = next(
+            (
+                normalized[name.casefold()]
+                for name in volume_priorities
+                if name.casefold() in normalized
+            ),
+            None,
+        )
+        if volume_control is None:
+            LOGGER.debug("No hay control ALSA de %s para %s", target, device_name)
+            return False
+        switch_name = volume_control.removesuffix(" Volume") + " Switch"
+        switch_control = normalized.get(switch_name.casefold())
+        hardware_level = max(0, min(100, level))
+        commands = [
+            [
+                "amixer",
+                "-q",
+                "-c",
+                card,
+                "cset",
+                f"name={volume_control}",
+                f"{hardware_level}%",
+            ]
+        ]
+        if switch_control:
+            switch_value = "off" if target == "salida" and hardware_level == 0 else "on"
+            commands.append(
+                [
+                    "amixer",
+                    "-q",
+                    "-c",
+                    card,
+                    "cset",
+                    f"name={switch_control}",
+                    switch_value,
+                ]
+            )
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if result.returncode != 0:
+                LOGGER.warning(
+                    "ALSA rechazó el ajuste de %s; se usará control digital",
+                    volume_control,
+                )
+                return False
+        LOGGER.info(
+            "Nivel real de ALSA ajustado: tarjeta %s, %s al %s%%",
+            card,
+            volume_control,
+            hardware_level,
+        )
+        return True

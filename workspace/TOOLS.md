@@ -23,7 +23,7 @@ Things like:
 
 ### SSH
 
-- home-server → 192.168.1.100, user: admin
+- home-server → <IP_PRIVADA>, user: <USUARIO>
 
 ### TTS
 

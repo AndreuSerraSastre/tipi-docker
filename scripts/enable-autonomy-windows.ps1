@@ -9,11 +9,6 @@ if (Test-Path -LiteralPath $dockerBin) { $env:PATH = "$dockerBin;$env:PATH" }
 
 & (Join-Path $PSScriptRoot 'start-host-bridge-windows.ps1')
 
-docker compose --profile tools run --rm --no-deps openclaw-cli exec-policy preset yolo
-if ($LASTEXITCODE -ne 0) { throw 'No se pudo activar la ejecución autónoma completa.' }
-docker compose --profile tools run --rm --no-deps openclaw-cli hooks enable boot-md
-if ($LASTEXITCODE -ne 0) { throw 'No se pudo activar la revisión de arranque de OpenClaw.' }
-
 $Marker = 'data\openclaw\workspace\.tipi-autonomy-v1'
 $Agents = 'data\openclaw\workspace\AGENTS.md'
 $Boot = 'data\openclaw\workspace\BOOT.md'
@@ -37,12 +32,21 @@ $AlreadyConfigured = (Test-Path -LiteralPath $Marker) -and `
     (Test-Path -LiteralPath $Lessons)
 if ($AlreadyConfigured) { return }
 
+docker compose --profile tools run --rm --no-deps openclaw-cli exec-policy preset yolo
+if ($LASTEXITCODE -ne 0) { throw 'No se pudo activar la ejecución autónoma completa.' }
+docker compose --profile tools run --rm --no-deps openclaw-cli hooks enable boot-md
+if ($LASTEXITCODE -ne 0) { throw 'No se pudo activar la revisión de arranque de OpenClaw.' }
+
 New-Item -ItemType Directory -Force -Path 'data\maintenance' | Out-Null
 $Request = Get-Content -LiteralPath 'config\tipi-autonomy-request.md' -Raw -Encoding utf8
+$thinkingLine = [IO.File]::ReadAllLines((Join-Path $ProjectRoot '.env')) |
+    Where-Object { $_.StartsWith('TIPI_OPENCLAW_THINKING=') } |
+    Select-Object -First 1
+$thinking = if ($thinkingLine) { $thinkingLine.Substring('TIPI_OPENCLAW_THINKING='.Length).Trim() } else { 'low' }
 Write-Host 'OpenClaw está creando y probando su modo cuidador...' -ForegroundColor Cyan
 docker compose --profile tools run --rm --no-deps openclaw-cli agent `
     --session-key 'agent:main:tipi-autonomy-setup' `
-    --thinking medium `
+    --thinking $thinking `
     --timeout 600 `
     --message $Request
 if ($LASTEXITCODE -ne 0) { throw 'OpenClaw no pudo completar la configuración de autocuidado.' }

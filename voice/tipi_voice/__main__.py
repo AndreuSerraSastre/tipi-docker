@@ -7,16 +7,25 @@ import sys
 import warnings
 
 from .app import TipiVoiceApp
-from .audio import list_devices
+from .audio import list_devices, list_devices_json
 from .config import Settings
-from .gateway import GatewayClient
+from .gateway import GatewayClient, GatewayError
 from .identity import DeviceIdentity
 
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Puente local de voz para Tipi")
-    parser.add_argument("--list-devices", action="store_true", help="muestra entradas y salidas")
-    parser.add_argument("--check", action="store_true", help="comprueba configuración y Gateway")
+    parser.add_argument(
+        "--list-devices", action="store_true", help="muestra entradas y salidas"
+    )
+    parser.add_argument(
+        "--list-devices-json",
+        action="store_true",
+        help="muestra entradas y salidas en JSON",
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="comprueba configuración y Gateway"
+    )
     return parser.parse_args()
 
 
@@ -60,7 +69,15 @@ async def _run_with_reconnect(settings: Settings) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logging.getLogger(__name__).error("Tipi Voice se reiniciará: %s", exc)
+            logger = logging.getLogger(__name__)
+            if isinstance(exc, (GatewayError, OSError)):
+                logger.warning(
+                    "Gateway no disponible; nuevo intento en %s s: %s", delay, exc
+                )
+            else:
+                logger.exception("Tipi Voice se reiniciará tras un fallo interno")
+            if settings.health_file:
+                settings.health_file.unlink(missing_ok=True)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30)
 
@@ -71,6 +88,9 @@ def main() -> int:
     _configure_logging(settings.log_level)
     if args.list_devices:
         print(list_devices())
+        return 0
+    if args.list_devices_json:
+        print(list_devices_json())
         return 0
     try:
         if args.check:

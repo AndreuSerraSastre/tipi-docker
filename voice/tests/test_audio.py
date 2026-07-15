@@ -1,11 +1,13 @@
 import queue
 import threading
 import time
+import json
 from types import SimpleNamespace
 
 import numpy as np
 
-from tipi_voice.audio import AudioEngine
+from tipi_voice import audio
+from tipi_voice.audio import AudioEngine, list_devices_json, resolve_device
 from tipi_voice.app import TipiVoiceApp
 
 
@@ -76,3 +78,48 @@ def test_default_chime_pcm_is_valid_mono_pcm16() -> None:
     samples = np.frombuffer(pcm, dtype="<i2")
     assert samples.size == round(24_000 * 0.18)
     assert np.max(np.abs(samples)) > 0
+
+
+def test_named_device_selection_filters_by_direction(monkeypatch) -> None:
+    devices = [
+        {
+            "name": "USB Audio input (hw:1,0)",
+            "max_input_channels": 1,
+            "max_output_channels": 0,
+            "default_samplerate": 48_000,
+        },
+        {
+            "name": "USB Audio output (hw:1,0)",
+            "max_input_channels": 0,
+            "max_output_channels": 2,
+            "default_samplerate": 48_000,
+        },
+    ]
+    monkeypatch.setattr(audio.sd, "query_devices", lambda: devices)
+
+    assert resolve_device("USB Audio", "entrada") == 0
+    assert resolve_device("USB Audio", "salida") == 1
+
+
+def test_device_json_contains_stable_capabilities(monkeypatch) -> None:
+    devices = [
+        {
+            "name": "USB Audio Device (hw:2,0)",
+            "max_input_channels": 1,
+            "max_output_channels": 2,
+            "default_samplerate": 48_000.0,
+        }
+    ]
+    monkeypatch.setattr(audio.sd, "query_devices", lambda: devices)
+
+    payload = json.loads(list_devices_json())
+
+    assert payload["devices"] == [
+        {
+            "index": 0,
+            "name": "USB Audio Device (hw:2,0)",
+            "inputChannels": 1,
+            "outputChannels": 2,
+            "defaultSampleRate": 48_000,
+        }
+    ]

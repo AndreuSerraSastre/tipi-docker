@@ -22,6 +22,7 @@ def test_settings_validation_rejects_missing_token(tmp_path: Path) -> None:
         state_dir=tmp_path,
         wake_words=("tipi",),
         idle_timeout_seconds=5,
+        agent_timeout_seconds=75,
         input_device=None,
         output_device=None,
         input_sample_rate=48_000,

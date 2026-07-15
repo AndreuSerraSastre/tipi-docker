@@ -19,7 +19,7 @@ from .config import Settings
 from .conversation_log import ConversationLogger
 from .gateway import GatewayClient, GatewayError
 from .identity import DeviceIdentity
-from .intents import is_stop_command
+from .intents import is_plausible_visitor_transcript, is_stop_command
 from .wake import WakeWordDetector
 
 LOGGER = logging.getLogger(__name__)
@@ -289,6 +289,15 @@ class TipiVoiceApp:
             if text and event.get("final") is True:
                 role = str(event.get("role") or "")
                 if role == "user":
+                    if not is_plausible_visitor_transcript(text):
+                        LOGGER.info("Transcripción descartada por idioma inesperado: %s", text)
+                        self.conversation_log.event(
+                            "TRANSCRIPCION_DESCARTADA",
+                            text,
+                            motivo="idioma_inesperado",
+                        )
+                        self._speech_started_at = None
+                        return
                     now = time.monotonic()
                     self._barge_in_cancelled = False
                     self._turn_number += 1

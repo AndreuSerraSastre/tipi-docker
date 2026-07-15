@@ -32,11 +32,30 @@ _STOP_PHRASES = {
     "deixa d escoltar",
 }
 
+_UNEXPECTED_SCRIPT_RE = re.compile(
+    r"[\u0400-\u04ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]"
+)
+_LATIN_LETTER_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")
+
 
 def is_stop_command(text: str) -> bool:
     """Detecta una orden inequívoca de cerrar la conversación de voz."""
     normalized = _normalize(text)
     if normalized in _STOP_PHRASES:
+        return True
+    if any(
+        f" {phrase}" in f" {normalized}"
+        for phrase in (
+            "callate",
+            "calla ya",
+            "callate ya",
+            "silencio",
+            "prou",
+            "atura t",
+            "deja de hablar",
+            "deixa de parlar",
+        )
+    ):
         return True
     return any(
         normalized.startswith(prefix)
@@ -50,3 +69,15 @@ def is_stop_command(text: str) -> bool:
             "tipi deixa de parlar",
         )
     )
+
+
+def is_plausible_visitor_transcript(text: str) -> bool:
+    """Descarta transcripciones claramente ajenas a español/catalán/inglés."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    unexpected = _UNEXPECTED_SCRIPT_RE.findall(stripped)
+    if not unexpected:
+        return True
+    latin = _LATIN_LETTER_RE.findall(stripped)
+    return bool(latin) and len(unexpected) <= len(latin)

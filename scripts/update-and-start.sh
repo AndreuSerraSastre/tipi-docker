@@ -15,9 +15,16 @@ PROFILE=(--profile linux-audio)
 old_openclaw="$(docker image inspect "$OPENCLAW_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
 old_voice="$(docker image inspect "$TIPI_VOICE_IMAGE" --format '{{.Id}}' 2>/dev/null || true)"
 
-if [[ "$OPENCLAW_IMAGE" == *:local || "$TIPI_VOICE_IMAGE" == *:local ]]; then
+if [[ "$OPENCLAW_IMAGE" == *:local && "$TIPI_VOICE_IMAGE" == *:local ]]; then
   FILES=(-f compose.yaml)
   update_command=(build --pull openclaw-gateway tipi-voice)
+elif [[ "$OPENCLAW_IMAGE" == *:local ]]; then
+  FILES=(-f compose.yaml)
+  update_command=(build --pull openclaw-gateway)
+elif [[ "$TIPI_VOICE_IMAGE" == *:local ]]; then
+  FILES=(-f compose.yaml)
+  update_command=(build --pull tipi-voice)
+  docker compose -f compose.yaml -f compose.registry.yaml pull openclaw-gateway openclaw-cli
 else
   update_command=(pull)
 fi

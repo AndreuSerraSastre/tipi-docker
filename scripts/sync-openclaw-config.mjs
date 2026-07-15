@@ -15,7 +15,11 @@ function merge(current, managed) {
 }
 
 const managed = JSON.parse(fs.readFileSync(templatePath, "utf8"));
-const openaiRealtime = managed?.talk?.realtime?.providers?.openai;
+const realtime = managed?.talk?.realtime;
+if (realtime && process.env.TIPI_REALTIME_SPEAKER_VOICE?.trim()) {
+  realtime.speakerVoice = process.env.TIPI_REALTIME_SPEAKER_VOICE.trim();
+}
+const openaiRealtime = realtime?.providers?.openai;
 if (openaiRealtime) {
   const overrides = {
     noiseReductionType: process.env.TIPI_REALTIME_NOISE_REDUCTION,

@@ -8,6 +8,7 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
        libasound2 \
        libportaudio2 \
+       libatomic1 \
        libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,4 +24,3 @@ RUN useradd --create-home --uid 10001 --groups audio tipi \
 
 USER tipi
 ENTRYPOINT ["python", "-m", "tipi_voice"]
-

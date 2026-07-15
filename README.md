@@ -111,6 +111,7 @@ El repositorio público es <https://github.com/AndreuSerraSastre/tipi-docker>. L
 - `TIPI_WAKE_WORDS=tipi,tipy,tip,tippi,tippy`: variantes de activación.
 - `TIPI_BARGE_IN=false`: semidúplex recomendado con altavoces para evitar eco.
 - `TIPI_VAD_MODE=0..3`: sensibilidad local; `3` es la más estricta.
+- `TIPI_REALTIME_SPEAKER_VOICE=cedar`: voz de OpenAI Realtime. Opciones habituales: `marin`, `cedar`, `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer` y `verse`; `marin` y `cedar` son las recomendadas. El cambio se aplica en una nueva sesión.
 - `TIPI_REALTIME_NOISE_REDUCTION=near_field|far_field|off`: `near_field` para cascos y `far_field` para el micrófono de sala del robot.
 - `TIPI_REALTIME_TRANSCRIPTION_LANGUAGE=es`: idioma principal enviado al transcriptor; el contexto permite contestar también en catalán.
 - `TIPI_REALTIME_TRANSCRIPTION_PROMPT=...`: vocabulario y contexto que ayudan a evitar transcripciones en idiomas aleatorios.

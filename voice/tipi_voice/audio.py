@@ -189,6 +189,9 @@ class AudioEngine:
         )
 
     def enqueue_output(self, pcm_mono: bytes) -> None:
+        # Close the microphone path before the worker consumes the first
+        # chunk, so Tipi never forwards the first syllables of its own voice.
+        self.is_playing.set()
         self._output_queue.put_nowait(pcm_mono)
 
     def play_ready_beep(self) -> None:

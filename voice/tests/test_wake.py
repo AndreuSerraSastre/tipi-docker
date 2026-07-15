@@ -75,6 +75,32 @@ def test_detector_accepts_completed_wake_phrase(monkeypatch) -> None:
     detector.recognizer = Recognizer()
     detector._rate_state = None
     detector._last_trigger = 0.0
+    detector._partial_phrase = ""
+    detector._partial_hits = 0
     monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
 
     assert detector.feed(b"tipi")
+
+
+def test_detector_accepts_stable_partial_during_playback(monkeypatch) -> None:
+    class Recognizer:
+        def AcceptWaveform(self, _pcm: bytes) -> bool:
+            return False
+
+        def PartialResult(self) -> str:
+            return json.dumps({"partial": "tipi"})
+
+        def Reset(self) -> None:
+            pass
+
+    detector = WakeWordDetector.__new__(WakeWordDetector)
+    detector.words = {"tipi"}
+    detector.recognizer = Recognizer()
+    detector._rate_state = None
+    detector._last_trigger = 0.0
+    detector._partial_phrase = ""
+    detector._partial_hits = 0
+    monkeypatch.setattr(wake.audioop, "ratecv", lambda *_args: (b"pcm", None))
+
+    assert not detector.feed(b"tipi", strict=True)
+    assert detector.feed(b"tipi", strict=True)

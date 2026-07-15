@@ -29,6 +29,7 @@ def test_settings_validation_rejects_missing_token(tmp_path: Path) -> None:
         output_channels=1,
         vad_mode=2,
         barge_in=False,
+        output_echo_guard_seconds=0.8,
         speaker_voice="cedar",
         health_file=None,
         log_dir=tmp_path / "logs",

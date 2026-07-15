@@ -36,27 +36,45 @@ class WakeWordDetector:
         self.recognizer = KaldiRecognizer(self.model, 16_000)
         self._rate_state: Any = None
         self._last_trigger = 0.0
+        self._partial_phrase = ""
+        self._partial_hits = 0
 
     def feed(self, pcm_48khz: bytes, *, strict: bool = False) -> bool:
         pcm_16khz, self._rate_state = audioop.ratecv(
             pcm_48khz, 2, 1, 48_000, 16_000, self._rate_state
         )
         complete = self.recognizer.AcceptWaveform(pcm_16khz)
-        # Partial Vosk hypotheses repeatedly classified ambient speech and
-        # noise as the tiny wake-word grammar. Wait for an utterance endpoint
-        # before waking so a short-lived partial guess cannot open a session.
-        if not complete:
+        if not complete and not strict:
+            # Outside playback, require an utterance endpoint. This prevents
+            # short-lived partial guesses from opening sessions in ambient noise.
             return False
-        raw = self.recognizer.Result()
+        raw = self.recognizer.Result() if complete else self.recognizer.PartialResult()
         data = json.loads(raw)
         phrase = normalize_phrase(data.get("text") or data.get("partial") or "")
         if not phrase or time.monotonic() - self._last_trigger < 2:
             return False
+        if not complete:
+            # During playback there may be no silence for Vosk to close the
+            # utterance. Require the same partial twice before interrupting.
+            if phrase == self._partial_phrase:
+                self._partial_hits += 1
+            else:
+                self._partial_phrase = phrase
+                self._partial_hits = 1
+            if self._partial_hits < 2:
+                return False
+        else:
+            self._partial_phrase = ""
+            self._partial_hits = 0
         match = matches_wake_phrase(phrase, self.words, strict=strict)
         if match:
             self._last_trigger = time.monotonic()
             self.recognizer.Reset()
+            self._partial_phrase = ""
+            self._partial_hits = 0
         return match
 
     def reset(self) -> None:
         self.recognizer.Reset()
+        self._partial_phrase = ""
+        self._partial_hits = 0

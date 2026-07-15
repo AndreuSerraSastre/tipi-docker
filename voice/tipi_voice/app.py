@@ -58,6 +58,10 @@ class TipiVoiceApp:
         self._turn_interrupted = False
         self._direct_response_finished = False
         self._duplicate_output_cancelled = False
+        self._output_echo_guard_until = 0.0
+        self._consult_wait_message_finished = False
+        self._consult_result_ready = False
+        self._consult_wait_output_cancelled = False
 
     async def run(self) -> None:
         self.settings.validate()
@@ -141,17 +145,18 @@ class TipiVoiceApp:
                 continue
 
             assert self.audio is not None
-            if self.audio.is_playing.is_set() and self.wake.feed(frame, strict=True):
+            output_active = self._output_is_active()
+            if output_active and self.wake.feed(frame, strict=True):
                 await self._interrupt_for_wake_word()
                 continue
             speaking = self._vad.is_speech(frame, 48_000)
-            if speaking and (not self.audio.is_playing.is_set() or self.settings.barge_in):
+            if speaking and (not output_active or self.settings.barge_in):
                 if self._speech_started_at is None:
                     self._speech_started_at = time.monotonic()
                     # Una voz nueva concede un turno completo, pero el ruido continuo no
                     # puede reiniciar indefinidamente el cierre por silencio.
                     self._mark_activity()
-            if self.audio.is_playing.is_set():
+            if output_active:
                 if not self.settings.barge_in:
                     continue
                 if speaking and not self._barge_in_cancelled:
@@ -251,6 +256,19 @@ class TipiVoiceApp:
             return
         if event_type == "audio" and event.get("audioBase64"):
             assert self.audio is not None
+            if self._should_suppress_consult_wait_output():
+                if not self._consult_wait_output_cancelled:
+                    self._consult_wait_output_cancelled = True
+                    LOGGER.warning("Se bloqueó una respuesta adicional mientras OpenClaw trabaja")
+                    self.conversation_log.event(
+                        "RESPUESTA_ESPERA_BLOQUEADA",
+                        "Realtime intentó volver a hablar antes del resultado de OpenClaw",
+                        turno=self._turn_number,
+                    )
+                    asyncio.create_task(
+                        self._cancel_output(reason="consult-wait-suppression")
+                    )
+                return
             if self._is_duplicate_direct_response():
                 if not self._duplicate_output_cancelled:
                     self._duplicate_output_cancelled = True
@@ -336,6 +354,11 @@ class TipiVoiceApp:
                         return
                     self._apply_spoken_audio_adjustment(text)
                 else:
+                    if self._should_suppress_consult_wait_output():
+                        LOGGER.warning(
+                            "Transcripción de espera adicional ignorada: %s", text
+                        )
+                        return
                     if self._is_duplicate_direct_response():
                         LOGGER.warning("Transcripción de respuesta duplicada ignorada: %s", text)
                         return
@@ -354,7 +377,9 @@ class TipiVoiceApp:
                         primera_voz_ms=self._turn_first_audio_ms,
                         respuesta_completa_ms=complete_ms,
                     )
-                    if not self._turn_consulted and not self.pending_tools:
+                    if self.pending_tools and not self._consult_result_ready:
+                        self._consult_wait_message_finished = True
+                    elif not self.pending_tools or self._consult_result_ready:
                         self._direct_response_finished = True
                 self._mark_activity()
             return
@@ -363,6 +388,10 @@ class TipiVoiceApp:
             name = str(event.get("name") or "")
             if name == "openclaw_agent_consult":
                 self._turn_consulted = True
+                if not self.pending_tools:
+                    self._consult_wait_message_finished = False
+                    self._consult_result_ready = False
+                    self._consult_wait_output_cancelled = False
             if (
                 call_id
                 and name == "openclaw_agent_consult"
@@ -441,6 +470,7 @@ class TipiVoiceApp:
                     consulta=question,
                     motivo="voces_realtime",
                 )
+                self._allow_consult_result_output()
                 await self._submit_tool_result(session_id, call_id, {"result": local_answer})
                 return
             self._turn_consulted = True
@@ -488,6 +518,7 @@ class TipiVoiceApp:
                 consulta=question,
                 duracion_ms=self._elapsed_ms(tool_started_at),
             )
+            self._allow_consult_result_output()
             await self._submit_tool_result(session_id, call_id, {"result": answer})
         except TimeoutError as exc:
             LOGGER.warning("La consulta del agente agoto el tiempo de espera")
@@ -498,6 +529,7 @@ class TipiVoiceApp:
                 duracion_ms=self._elapsed_ms(tool_started_at),
             )
             with suppress(Exception):
+                self._allow_consult_result_output()
                 await self._submit_tool_result(session_id, call_id, {"error": str(exc)})
         except GatewayError as exc:
             message = str(exc)
@@ -512,6 +544,7 @@ class TipiVoiceApp:
                 duracion_ms=self._elapsed_ms(tool_started_at),
             )
             with suppress(Exception):
+                self._allow_consult_result_output()
                 await self._submit_tool_result(session_id, call_id, {"error": message})
         except Exception as exc:
             LOGGER.exception("Falló la consulta del agente")
@@ -522,6 +555,7 @@ class TipiVoiceApp:
                 duracion_ms=self._elapsed_ms(tool_started_at),
             )
             with suppress(Exception):
+                self._allow_consult_result_output()
                 await self._submit_tool_result(session_id, call_id, {"error": str(exc)})
         finally:
             self.pending_tools.discard(call_id)
@@ -707,6 +741,10 @@ class TipiVoiceApp:
             self._turn_interrupted = False
             self._direct_response_finished = False
             self._duplicate_output_cancelled = False
+            self._output_echo_guard_until = 0.0
+            self._consult_wait_message_finished = False
+            self._consult_result_ready = False
+            self._consult_wait_output_cancelled = False
             self._turn_number = 0
         finally:
             self._closing_session = False
@@ -727,14 +765,32 @@ class TipiVoiceApp:
         self.last_activity = time.monotonic()
 
     def _is_duplicate_direct_response(self) -> bool:
-        return (
-            self._direct_response_finished
-            and not self._turn_consulted
-            and not self.pending_tools
+        return self._direct_response_finished and not self.pending_tools
+
+    def _output_is_active(self) -> bool:
+        return bool(
+            self.audio
+            and (
+                self.audio.is_playing.is_set()
+                or time.monotonic() < self._output_echo_guard_until
+            )
         )
+
+    def _should_suppress_consult_wait_output(self) -> bool:
+        return self._consult_wait_message_finished and not self._consult_result_ready
+
+    def _allow_consult_result_output(self) -> None:
+        self._consult_result_ready = True
+        self._consult_wait_output_cancelled = False
+        self._direct_response_finished = False
 
     def _on_output_done(self) -> None:
         self._mark_activity()
+        self._output_echo_guard_until = (
+            time.monotonic() + self.settings.output_echo_guard_seconds
+        )
+        self._speech_started_at = None
+        self._realtime_buffer.clear()
         if self.wake:
             self.wake.reset()
 

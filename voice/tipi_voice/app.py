@@ -25,6 +25,10 @@ from .wake import WakeWordDetector
 
 LOGGER = logging.getLogger(__name__)
 REALTIME_BATCH_BYTES = 24_000 * 160 // 1000 * 2
+OFFLINE_MESSAGE = (
+    "Ahora mismo no tengo conexión a Internet. "
+    "Volveré a estar disponible cuando se recupere."
+)
 
 
 class TipiVoiceApp:
@@ -152,11 +156,13 @@ class TipiVoiceApp:
         while True:
             frame = await self.mic_queue.get()
             if self.session_id is None:
+                if self._output_is_active():
+                    continue
                 if self.wake.feed(frame):
                     self._wake_detected_at = time.monotonic()
                     LOGGER.info("Palabra de activación detectada")
                     self.conversation_log.event("ACTIVACION", "Palabra Tipi detectada")
-                    await self._open_session()
+                    await self._start_conversation()
                 continue
 
             assert self.audio is not None
@@ -178,6 +184,42 @@ class TipiVoiceApp:
                     self._barge_in_cancelled = True
                     asyncio.create_task(self._cancel_output())
             await self._queue_realtime_frame(frame)
+
+    async def _start_conversation(self) -> None:
+        if not await self._internet_available():
+            self._respond_without_internet()
+            return
+        try:
+            await self._open_session()
+        except (GatewayError, OSError, TimeoutError) as exc:
+            LOGGER.warning("No se pudo abrir Realtime: %s", exc)
+            self._respond_without_internet()
+
+    async def _internet_available(self) -> bool:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("api.openai.com", 443), timeout=3
+            )
+        except (OSError, TimeoutError):
+            return False
+        writer.close()
+        with suppress(Exception):
+            await writer.wait_closed()
+        return True
+
+    def _respond_without_internet(self) -> None:
+        assert self.audio is not None
+        LOGGER.warning("Sin conexión a Internet; se reproduce una respuesta local")
+        self.conversation_log.event(
+            "SIN_INTERNET",
+            "Tipi responde localmente porque Realtime no está disponible",
+        )
+        if self.wake:
+            self.wake.reset()
+        self._drain_microphone_queue()
+        self._wake_detected_at = None
+        self._speech_started_at = None
+        self.audio.play_local_speech(OFFLINE_MESSAGE)
 
     async def _open_session(self) -> None:
         assert self.gateway is not None

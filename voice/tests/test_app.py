@@ -364,6 +364,43 @@ async def test_new_session_uses_the_persisted_voice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wake_responds_locally_without_internet() -> None:
+    spoken: list[str] = []
+    events: list[tuple[object, ...]] = []
+
+    class Wake:
+        def __init__(self) -> None:
+            self.reset_count = 0
+
+        def reset(self) -> None:
+            self.reset_count += 1
+
+    async def internet_unavailable() -> bool:
+        return False
+
+    app = object.__new__(TipiVoiceApp)
+    app.audio = SimpleNamespace(play_local_speech=spoken.append)
+    app.wake = Wake()
+    app.mic_queue = asyncio.Queue()
+    app.mic_queue.put_nowait(b"pregunta")
+    app._wake_detected_at = 1.0
+    app._speech_started_at = 2.0
+    app._internet_available = internet_unavailable
+    app.conversation_log = SimpleNamespace(
+        event=lambda *args, **kwargs: events.append((*args, kwargs))
+    )
+
+    await app._start_conversation()
+
+    assert spoken == [app_module.OFFLINE_MESSAGE]
+    assert app.wake.reset_count == 1
+    assert app.mic_queue.empty()
+    assert app._wake_detected_at is None
+    assert app._speech_started_at is None
+    assert events[0][0] == "SIN_INTERNET"
+
+
+@pytest.mark.asyncio
 async def test_new_session_forwards_audio_captured_while_connecting_before_beep() -> (
     None
 ):

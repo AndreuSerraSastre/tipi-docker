@@ -80,6 +80,21 @@ def test_default_chime_pcm_is_valid_mono_pcm16() -> None:
     assert np.max(np.abs(samples)) > 0
 
 
+def test_local_speech_queues_pcm_at_canonical_realtime_rate(monkeypatch) -> None:
+    engine = object.__new__(AudioEngine)
+    engine.is_playing = threading.Event()
+    engine._output_queue = queue.Queue(maxsize=8)
+    engine._output_rate_state = object()
+    monkeypatch.setattr(audio, "_synthesize_speech_pcm", lambda _text: b"\x01\x00")
+
+    engine.play_local_speech("Sin conexión")
+
+    assert engine.realtime_output_rate == 24_000
+    assert engine._output_rate_state is None
+    assert engine._output_queue.get_nowait() == b"\x01\x00"
+    assert not isinstance(engine._output_queue.get_nowait(), bytes)
+
+
 def test_named_device_selection_filters_by_direction(monkeypatch) -> None:
     devices = [
         {

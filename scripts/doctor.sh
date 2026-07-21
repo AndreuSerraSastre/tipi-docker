@@ -185,6 +185,18 @@ if command -v systemctl >/dev/null; then
     exit 1
   }
   echo "OK: tipi.service está habilitado y $service_state como $service_user."
+  systemctl list-unit-files tipi-network-watchdog.service --no-legend 2>/dev/null \
+    | grep -q '^tipi-network-watchdog.service' || {
+      echo 'tipi-network-watchdog.service no está instalado.' >&2
+      exit 1
+    }
+  systemctl is-enabled --quiet tipi-network-watchdog.service
+  watchdog_state="$(systemctl is-active tipi-network-watchdog.service 2>/dev/null || true)"
+  [[ "$watchdog_state" == active ]] || {
+    echo "El watchdog de red no está activo: $watchdog_state" >&2
+    exit 1
+  }
+  echo 'OK: recuperación automática tras volver Internet activa.'
 fi
 
 echo 'Diagnóstico de Tipi completado sin errores.'

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import audioop
+import io
 import json
 import logging
 import queue
+import subprocess
 import threading
+import wave
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
@@ -21,6 +24,29 @@ FRAME_BYTES = CANONICAL_RATE * FRAME_MS // 1000 * 2
 _STOP = object()
 _CLEAR = object()
 _DONE = object()
+
+
+def _synthesize_speech_pcm(text: str) -> bytes:
+    result = subprocess.run(
+        ["espeak-ng", "--stdout", "-v", "es", "-s", "155", "-a", "160", text],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    with wave.open(io.BytesIO(result.stdout), "rb") as source:
+        channels = source.getnchannels()
+        sample_width = source.getsampwidth()
+        sample_rate = source.getframerate()
+        pcm = source.readframes(source.getnframes())
+    if sample_width != 2:
+        raise ValueError("espeak-ng no devolvió PCM16")
+    if channels == 2:
+        pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
+    elif channels != 1:
+        raise ValueError("espeak-ng devolvió un número de canales no compatible")
+    if sample_rate != REALTIME_OUTPUT_RATE:
+        pcm, _ = audioop.ratecv(pcm, 2, 1, sample_rate, REALTIME_OUTPUT_RATE, None)
+    return pcm
 
 
 def list_devices() -> str:
@@ -281,6 +307,12 @@ class AudioEngine:
         silence = np.zeros(round(sample_rate * 0.06), dtype=np.float64)
         samples = np.concatenate((tone(523.25, 0.14), silence, tone(783.99, 0.24)))
         self.enqueue_output((samples * 32767).astype("<i2").tobytes())
+        self.mark_output_done()
+
+    def play_local_speech(self, text: str) -> None:
+        self.realtime_output_rate = REALTIME_OUTPUT_RATE
+        self._output_rate_state = None
+        self.enqueue_output(_synthesize_speech_pcm(text))
         self.mark_output_done()
 
     def mark_output_done(self) -> None:

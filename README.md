@@ -8,13 +8,14 @@ Instalación reproducible de OpenClaw para PC y Raspberry Pi con conversación p
 - OpenClaw Talk con `gpt-realtime-2.1-mini`, voz `cedar`, razonamiento `low`, reducción de ruido y transcripción guiada para español y catalán.
 - Puente de voz Python 3.12 para Linux/ARM64, Linux/AMD64 y Windows.
 - Activación offline mediante Vosk. Durante la reproducción correlaciona un reconocedor abierto con una gramática contrastiva que incluye los confusores, y solo recupera alias finales largos con un cierre abierto reciente y seguro. Así oye «Tipi» bajo voz solapada sin confiar ciegamente en «tipo», «típico», «sí» o «para ti».
+- Respuesta local sin Internet: la palabra «Tipi» continúa activa y `espeak-ng` avisa de que no hay conexión, sin enviar audio ni depender de OpenAI.
 - Consulta híbrida: Realtime resuelve conversación sencilla y delega en OpenClaw cuando necesita memoria, archivos, información actual, herramientas, acciones o verificación.
 - Interrupción local: decir «Tipi» durante una respuesta detiene inmediatamente el audio atrasado y abre un nuevo turno. La consulta activa se conserva para poder corregirla o ampliarla.
 - Cierre local con «cállate», «para», «silencio», «prou» y variantes inequívocas.
 - Control hablado y persistente del volumen y de la sensibilidad del micrófono. En Linux se usan controles ALSA separados para no activar retorno del micrófono.
 - Cambio hablado y persistente de voz: por ejemplo, «pon Marin» la prepara para la siguiente conversación sin editar archivos ni reiniciar el robot.
 - Registro legible y JSONL de conversaciones, tool calls, latencias, interrupciones y errores, con redacción de credenciales reconocibles.
-- Servicio `systemd`, actualización de imágenes, healthchecks y recuperación automática de la versión anterior.
+- Servicios `systemd`, actualización de imágenes, healthchecks, recuperación automática de la versión anterior y reinicio de sesiones cuando vuelve Internet.
 - Modo cuidador de OpenClaw con identidad, memoria y revisiones de arranque y heartbeat.
 
 ## Credenciales

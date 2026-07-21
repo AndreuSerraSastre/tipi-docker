@@ -1,0 +1,17 @@
+[Unit]
+Description=Tipi - recuperacion tras volver Internet
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/tipi-network-watchdog
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

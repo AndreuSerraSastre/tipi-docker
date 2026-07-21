@@ -180,6 +180,9 @@ tipi_compose --profile linux-audio up -d --wait tipi-voice
 
 service_template="$ROOT/systemd/tipi.service"
 service_target='/etc/systemd/system/tipi.service'
+watchdog_template="$ROOT/systemd/tipi-network-watchdog.service"
+watchdog_target='/etc/systemd/system/tipi-network-watchdog.service'
+watchdog_script_target='/usr/local/libexec/tipi-network-watchdog'
 service_user="${SUDO_USER:-$(id -un)}"
 [[ "$service_user" != root ]] || service_user="$(stat -c '%U' "$ROOT")"
 service_group="$(id -gn "$service_user")"
@@ -190,8 +193,13 @@ sed \
   -e "s|__TIPI_USER__|$service_user|g" \
   -e "s|__TIPI_GROUP__|$service_group|g" \
   "$service_template" | "${SUDO[@]}" tee "$service_target" >/dev/null
+"${SUDO[@]}" install -o root -g root -m 0755 \
+  "$ROOT/scripts/network-watchdog.sh" "$watchdog_script_target"
+"${SUDO[@]}" install -o root -g root -m 0644 \
+  "$watchdog_template" "$watchdog_target"
 "${SUDO[@]}" systemctl daemon-reload
-"${SUDO[@]}" systemctl enable tipi.service
+"${SUDO[@]}" systemctl enable tipi.service tipi-network-watchdog.service
+"${SUDO[@]}" systemctl restart tipi-network-watchdog.service
 "${SUDO[@]}" systemctl restart tipi.service
 "$ROOT/scripts/doctor.sh"
 

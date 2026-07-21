@@ -101,6 +101,25 @@ def test_named_device_selection_filters_by_direction(monkeypatch) -> None:
     assert resolve_device("USB Audio", "salida") == 1
 
 
+def test_named_device_selection_refreshes_stale_portaudio_devices(monkeypatch) -> None:
+    devices = [
+        {
+            "name": "USB Audio Device: - (hw:1,0)",
+            "max_input_channels": 1,
+            "max_output_channels": 2,
+            "default_samplerate": 48_000,
+        }
+    ]
+    queries = iter(([], devices))
+    lifecycle: list[str] = []
+    monkeypatch.setattr(audio.sd, "query_devices", lambda: next(queries))
+    monkeypatch.setattr(audio.sd, "_terminate", lambda: lifecycle.append("terminate"))
+    monkeypatch.setattr(audio.sd, "_initialize", lambda: lifecycle.append("initialize"))
+
+    assert resolve_device("hw:1,0", "entrada") == 0
+    assert lifecycle == ["terminate", "initialize"]
+
+
 def test_device_json_contains_stable_capabilities(monkeypatch) -> None:
     devices = [
         {

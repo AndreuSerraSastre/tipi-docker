@@ -56,13 +56,29 @@ def list_devices_json() -> str:
     return json.dumps({"devices": devices}, ensure_ascii=False)
 
 
+def _refresh_portaudio_devices() -> Any:
+    """Reinicializa PortAudio para descartar una enumeración ALSA obsoleta."""
+    terminate = getattr(sd, "_terminate", None)
+    initialize = getattr(sd, "_initialize", None)
+    if not callable(terminate) or not callable(initialize):
+        return sd.query_devices()
+    LOGGER.warning("PortAudio no ve el dispositivo configurado; se refresca ALSA")
+    try:
+        terminate()
+    finally:
+        initialize()
+    return sd.query_devices()
+
+
 def resolve_device(selector: str | int | None, kind: str) -> int | None:
     if selector is None:
         return None
     devices = sd.query_devices()
     if isinstance(selector, int):
         if selector < 0 or selector >= len(devices):
-            raise ValueError(f"Índice de audio inexistente: {selector}")
+            devices = _refresh_portaudio_devices()
+            if selector < 0 or selector >= len(devices):
+                raise ValueError(f"Índice de audio inexistente: {selector}")
         selected = selector
     else:
         needle = selector.casefold()
@@ -75,7 +91,14 @@ def resolve_device(selector: str | int | None, kind: str) -> int | None:
             if needle in item["name"].casefold() and item[channel_key] >= 1
         ]
         if not matches:
-            raise ValueError(f"No se encontró el dispositivo de {kind}: {selector}")
+            devices = _refresh_portaudio_devices()
+            matches = [
+                index
+                for index, item in enumerate(devices)
+                if needle in item["name"].casefold() and item[channel_key] >= 1
+            ]
+            if not matches:
+                raise ValueError(f"No se encontró el dispositivo de {kind}: {selector}")
         selected = matches[0]
     channel_key = "max_input_channels" if kind == "entrada" else "max_output_channels"
     if devices[selected][channel_key] < 1:

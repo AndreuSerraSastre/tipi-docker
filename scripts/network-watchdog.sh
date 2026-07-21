@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STATE_FILE="${TIPI_NETWORK_STATE_FILE:-/run/tipi-network-watchdog.state}"
+STATE_FILE="${TIPI_NETWORK_STATE_FILE:-/run/tipi-network-watchdog/state}"
 CHECK_URL="${TIPI_CONNECTIVITY_URL:-https://api.openai.com/v1/models}"
 INTERVAL_SECONDS="${TIPI_NETWORK_CHECK_INTERVAL_SECONDS:-10}"
 FAILURES_REQUIRED="${TIPI_NETWORK_FAILURES_REQUIRED:-3}"

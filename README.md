@@ -134,7 +134,7 @@ GitHub Actions ejecuta pruebas Python, validación de Compose/JSON/Node, `shellc
 - `ghcr.io/andreuserrasastre/tipi-openclaw:latest`
 - `ghcr.io/andreuserrasastre/tipi-voice:latest`
 
-El workflow se ejecuta en cada cambio de `main`, al crear una etiqueta y diariamente para incorporar una base OpenClaw actualizada. Una publicación solo continúa si todas las verificaciones pasan.
+El workflow se ejecuta en cada cambio de `main`, al crear una etiqueta y diariamente. Las imágenes base de OpenClaw y Docker CLI están fijadas por digest multi-arquitectura para que una reconstrucción sea reproducible; su actualización es explícita y debe probarse antes de cambiar esos digests. Una publicación solo continúa si todas las verificaciones pasan.
 
 El repositorio público es <https://github.com/AndreuSerraSastre/tipi-docker>. Nunca deben incorporarse `.env`, `data/`, copias de seguridad, claves, sesiones ni logs.
 

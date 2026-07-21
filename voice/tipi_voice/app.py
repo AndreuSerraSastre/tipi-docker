@@ -13,7 +13,7 @@ from typing import Any
 import webrtcvad
 
 from . import __version__
-from .audio import AudioEngine
+from .audio import FRAME_MS, AudioEngine
 from .audio_controls import AudioAdjustment, AudioLevelStore, SystemAudioController
 from .config import Settings
 from .conversation_log import ConversationLogger
@@ -234,7 +234,42 @@ class TipiVoiceApp:
             sample_rate=output_rate,
             channels=output_channels,
         )
+        await self._forward_startup_microphone_audio()
         self.audio.play_ready_beep()
+
+    async def _forward_startup_microphone_audio(self) -> None:
+        """Conserva lo dicho mientras el Gateway prepara la sesión Realtime."""
+        frames: list[bytes] = []
+        while True:
+            try:
+                frames.append(self.mic_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not frames:
+            return
+
+        speech_frames = 0
+        for frame in frames:
+            speaking = self._vad.is_speech(frame, 48_000)
+            if speaking:
+                speech_frames += 1
+                if self._speech_started_at is None:
+                    self._speech_started_at = time.monotonic()
+                    self._mark_activity()
+            await self._queue_realtime_frame(frame)
+
+        duration_ms = len(frames) * FRAME_MS
+        LOGGER.info(
+            "Audio dicho durante la apertura conservado: %d ms; voz=%d ms",
+            duration_ms,
+            speech_frames * FRAME_MS,
+        )
+        self.conversation_log.event(
+            "AUDIO_APERTURA",
+            "Audio previo al pitido enviado a Realtime",
+            duracion_ms=duration_ms,
+            voz_ms=speech_frames * FRAME_MS,
+        )
 
     async def _queue_realtime_frame(self, frame_48khz: bytes) -> None:
         if self.session_id is None or self._audio_sender_queue is None:

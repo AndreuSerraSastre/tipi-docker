@@ -67,6 +67,8 @@ Para validar la palabra de activación a través de los altavoces, la sala y el 
 ./scripts/test-wake-room.sh
 ```
 
+La activación admite decir la pregunta seguida, por ejemplo «Tipi, ¿qué hora es?», sin esperar al pitido. El audio capturado mientras Realtime termina de abrirse se conserva y se envía antes de reproducir la señal de listo.
+
 La prueba reproduce tres «Tipi» solapados y seis frases conflictivas, detiene solo la voz durante la captura y siempre restaura su estado anterior. Si falla, conserva las grabaciones bajo `/tmp/tipi-wake-room-test`; también admite dispositivos explícitos, por ejemplo `./scripts/test-wake-room.sh hw:1,0 hw:1,0`.
 
 Desde otro PC:

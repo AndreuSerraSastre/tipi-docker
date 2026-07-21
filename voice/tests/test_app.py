@@ -349,6 +349,7 @@ async def test_new_session_uses_the_persisted_voice() -> None:
     app.audio = Audio()
     app.settings = SimpleNamespace(session_key="agent:main:tipi-voice")
     app.voice_preferences = SimpleNamespace(voice="marin")
+    app.mic_queue = asyncio.Queue()
     app._wake_detected_at = None
     app._realtime_rate_state = None
     app._realtime_buffer = bytearray()
@@ -357,6 +358,60 @@ async def test_new_session_uses_the_persisted_voice() -> None:
     await app._open_session()
 
     assert app.gateway.create_params["voice"] == "marin"
+    app.session_id = None
+    app._audio_sender_task.cancel()
+    await asyncio.gather(app._audio_sender_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_new_session_forwards_audio_captured_while_connecting_before_beep() -> (
+    None
+):
+    events: list[object] = []
+
+    class Gateway:
+        async def request(self, method: str, params: dict, timeout: float) -> dict:
+            assert method == "talk.session.create"
+            app.mic_queue.put_nowait(b"question-1")
+            app.mic_queue.put_nowait(b"question-2")
+            return {"relaySessionId": "relay-startup"}
+
+    class Audio:
+        def set_realtime_output_format(
+            self, *, sample_rate: int, channels: int
+        ) -> None:
+            assert (sample_rate, channels) == (24_000, 1)
+
+        def play_ready_beep(self) -> None:
+            events.append("beep")
+
+    class Vad:
+        def is_speech(self, frame: bytes, sample_rate: int) -> bool:
+            assert sample_rate == 48_000
+            return frame == b"question-1"
+
+    async def queue_frame(frame: bytes) -> None:
+        events.append(frame)
+
+    app = object.__new__(TipiVoiceApp)
+    app.gateway = Gateway()
+    app.audio = Audio()
+    app.settings = SimpleNamespace(session_key="agent:main:tipi-voice")
+    app.voice_preferences = SimpleNamespace(voice="marin")
+    app.mic_queue = asyncio.Queue()
+    app._vad = Vad()
+    app._wake_detected_at = None
+    app._speech_started_at = None
+    app._realtime_rate_state = None
+    app._realtime_buffer = bytearray()
+    app._queue_realtime_frame = queue_frame
+    app.conversation_log = SimpleNamespace(event=lambda *_args, **_kwargs: None)
+
+    await app._open_session()
+
+    assert events == [b"question-1", b"question-2", "beep"]
+    assert app.mic_queue.empty()
+    assert app._speech_started_at is not None
     app.session_id = None
     app._audio_sender_task.cancel()
     await asyncio.gather(app._audio_sender_task, return_exceptions=True)

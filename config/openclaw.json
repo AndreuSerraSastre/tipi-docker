@@ -53,7 +53,7 @@
     "interruptOnSpeech": false,
     "realtime": {
       "provider": "openai",
-      "model": "gpt-realtime-2.1",
+      "model": "gpt-realtime-2.1-mini",
       "speakerVoice": "cedar",
       "mode": "realtime",
       "transport": "gateway-relay",
